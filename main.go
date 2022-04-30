@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -53,6 +54,29 @@ func main() {
 		log.Fatal("Unable to create label:", err)
 	}
 	grid.Add(gpu)
+
+	name, values := nvidia.GetInformations()
+	nameLabel, err := gtk.LabelNew(name)
+	grid.Add(nameLabel)
+
+	for key, val := range values {
+		innerGrid, err := gtk.GridNew()
+		if err != nil {
+			log.Fatal("Unable to create grid:", err)
+		}
+		innerGrid.SetOrientation(gtk.ORIENTATION_HORIZONTAL)
+		nameLabel, err := gtk.LabelNew(key)
+		if err != nil {
+			log.Fatal("Unable to create label:", err)
+		}
+		innerGrid.Add(nameLabel)
+		valueLabel, err := gtk.LabelNew(val)
+		if err != nil {
+			log.Fatal("Unable to create label:", err)
+		}
+		innerGrid.Add(valueLabel)
+		grid.Add(innerGrid)
+	}
 
 	win.Add(grid)
 
