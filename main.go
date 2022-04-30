@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/KaiSta/OpenHWInfo/cpuinfo"
 	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/gotk3/gotk3/gtk"
 )
@@ -57,20 +58,25 @@ type guiFields struct {
 func updateInfos() hardwareInfos {
 	var hwdInfos hardwareInfos
 
+	// CPU
+	name, values := cpuinfo.GetInformations()
+
 	// GPU
-	name, values := nvidia.GetInformations()
-	hwdInfos.gpuName = name
-	hwdInfos.gpuClock = values["gpu.clock"]
-	hwdInfos.gpuMemClock = values["memory.clock"]
-	hwdInfos.gpuTemp = values["gpu.temp"]
-	hwdInfos.gpuPowerDraw = values["gpu.power.draw"]
-	hwdInfos.gpuPowerDrawMax = values["gpu.power.max"]
-	hwdInfos.gpuPowerDrawLimit = values["gpu.power.limit"]
-	hwdInfos.gpuUtil = values["gpu.usage"]
-	hwdInfos.gpuMemTemp = values["memory.temp"]
-	hwdInfos.gpuMemTotal = values["memory.total"]
-	hwdInfos.gpuFanSpeed = values["fan.speed"]
-	hwdInfos.gpuMemCurrent = values["memory.used"]
+	name, values = nvidia.GetInformations()
+	if name != "" {
+		hwdInfos.gpuName = name
+		hwdInfos.gpuClock = values["gpu.clock"]
+		hwdInfos.gpuMemClock = values["memory.clock"]
+		hwdInfos.gpuTemp = values["gpu.temp"]
+		hwdInfos.gpuPowerDraw = values["gpu.power.draw"]
+		hwdInfos.gpuPowerDrawMax = values["gpu.power.max"]
+		hwdInfos.gpuPowerDrawLimit = values["gpu.power.limit"]
+		hwdInfos.gpuUtil = values["gpu.usage"]
+		hwdInfos.gpuMemTemp = values["memory.temp"]
+		hwdInfos.gpuMemTotal = values["memory.total"]
+		hwdInfos.gpuFanSpeed = values["fan.speed"]
+		hwdInfos.gpuMemCurrent = values["memory.used"]
+	}
 
 	return hwdInfos
 }
