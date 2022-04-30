@@ -23,3 +23,8 @@ lm-sensors `sensors`
 * Current and max power draw
 * RAM current/max
 * Utilization
+
+https://nvidia.custhelp.com/app/answers/detail/a_id/3751/~/useful-nvidia-smi-queries
+https://developer.download.nvidia.com/compute/DCGM/docs/nvidia-smi-367.38.pdf
+
+### AMD
