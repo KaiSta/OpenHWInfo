@@ -27,6 +27,7 @@ type hardwareInfos struct {
 	gpuUtil           string
 	gpuMemTemp        string
 	gpuMemTotal       string
+	gpuMemCurrent     string
 	gpuFanSpeed       string
 }
 
@@ -49,6 +50,7 @@ type guiFields struct {
 	gpuUtil           *gtk.Label
 	gpuMemTemp        *gtk.Label
 	gpuMemTotal       *gtk.Label
+	gpuMemCurrent     *gtk.Label
 	gpuFanSpeed       *gtk.Label
 }
 
@@ -68,6 +70,7 @@ func updateInfos() hardwareInfos {
 	hwdInfos.gpuMemTemp = values["memory.temp"]
 	hwdInfos.gpuMemTotal = values["memory.total"]
 	hwdInfos.gpuFanSpeed = values["fan.speed"]
+	hwdInfos.gpuMemCurrent = values["memory.used"]
 
 	return hwdInfos
 }
@@ -121,6 +124,7 @@ func main() {
 	fields.gpuPowerDrawLimit, err = gtk.LabelNew("GPUPOWERDRAWLIMIT")
 	fields.gpuUtil, err = gtk.LabelNew("GPUUTIL")
 	fields.gpuMemTemp, err = gtk.LabelNew("GPUMEMTEMP")
+	fields.gpuMemCurrent, err = gtk.LabelNew("GPUMEMCURRENT")
 	fields.gpuMemTotal, err = gtk.LabelNew("GPUMEMTOTAL")
 	fields.gpuFanSpeed, err = gtk.LabelNew("GPUFANSPEED")
 
@@ -151,6 +155,7 @@ func main() {
 	gpuGrid.Add(createRow("PowerMax:", fields.gpuPowerDrawMax))
 	gpuGrid.Add(createRow("PowerLimit:", fields.gpuPowerDrawLimit))
 	gpuGrid.Add(createRow("Mem Temp:", fields.gpuMemTemp))
+	gpuGrid.Add(createRow("Mem Current:", fields.gpuMemCurrent))
 	gpuGrid.Add(createRow("Mem Total:", fields.gpuMemTotal))
 	gpuGrid.Add(createRow("Fan Speed:", fields.gpuFanSpeed))
 
@@ -180,6 +185,7 @@ func main() {
 			fields.gpuUtil.SetText(infos.gpuUtil)
 			fields.gpuFanSpeed.SetText(infos.gpuFanSpeed)
 			fields.gpuMemTemp.SetText(infos.gpuMemTemp)
+			fields.gpuMemCurrent.SetText(infos.gpuMemCurrent)
 			fields.gpuMemTotal.SetText(infos.gpuMemTotal)
 
 			time.Sleep(3 * time.Second)
