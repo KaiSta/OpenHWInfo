@@ -2,6 +2,8 @@ package cpuinfo
 
 import (
 	"bytes"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"os/exec"
 	"strings"
@@ -41,8 +43,22 @@ func GetInformations() (string, map[string]string) {
 	}
 
 	log.Println("intel infos END")
-	for k, v := range result {
-		println(k, v)
+
+	cpuinfos, err := ioutil.ReadFile("/proc/cpuinfo") // the file is inside the local directory
+	if err != nil {
+		log.Fatal("Reading /proc/cpuinfo failed:", err)
 	}
-	return "unknown", result
+	name := ""
+	cpus := 0
+	lines = strings.Split(string(cpuinfos), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "model name") {
+			name = strings.Split(line, ":")[1]
+		} else if strings.HasPrefix(line, "cpu MHz") {
+			result[fmt.Sprintf("cpu.clock%d", cpus)] = strings.Split(line, ":")[1]
+			cpus++
+		}
+	}
+
+	return name, result
 }

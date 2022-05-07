@@ -63,15 +63,18 @@ func updateInfos() hardwareInfos {
 
 	// CPU
 	name, values := cpuinfo.GetInformations()
+	hwdInfos.cpuName = name
 	hwdInfos.cpuTemp = values["cpu.temp"]
 	for k, v := range values {
 		if strings.Contains(k, "Core") {
 			hwdInfos.coreTemps = append(hwdInfos.coreTemps, v)
-		}
-		if strings.Contains(k, "Package") {
+		} else if strings.Contains(k, "Package") {
 			hwdInfos.cpuTemp2 = v
+		} else if strings.HasPrefix(k, "cpu.clock") {
+			hwdInfos.coreClocks = append(hwdInfos.coreClocks, v)
 		}
 	}
+	hwdInfos.cpuClock = hwdInfos.coreClocks[0]
 
 	// GPU
 	name, values = nvidia.GetInformations()
@@ -194,6 +197,8 @@ func main() {
 		for true {
 			infos := updateInfos()
 			//CPU
+			fields.cpuName.SetText(infos.cpuName)
+			fields.cpuClock.SetText(infos.cpuClock)
 			fields.cpuTemp.SetText(infos.cpuTemp)
 			fields.cpuTemp2.SetText(infos.cpuTemp2)
 
