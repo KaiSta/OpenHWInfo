@@ -11,6 +11,7 @@
 lm-sensors `sensors`
 
 * CPU temperature
+* PCH temp = chipset
 
 ## GPU infos
 
