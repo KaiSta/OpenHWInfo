@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
@@ -14,6 +15,7 @@ type hardwareInfos struct {
 	cpuClock          string
 	cpuTemp           string
 	cpuTemp2          string
+	coreTemps         []string
 	cpuUtil           string
 	coreClocks        []string
 	memoryMax         string
@@ -38,6 +40,7 @@ type guiFields struct {
 	cpuTemp           *gtk.Label
 	cpuTemp2          *gtk.Label
 	cpuUtil           *gtk.Label
+	coreTemps         []*gtk.Label
 	coreClocks        []*gtk.Label
 	memoryMax         *gtk.Label
 	memoryCurrent     *gtk.Label
@@ -60,6 +63,15 @@ func updateInfos() hardwareInfos {
 
 	// CPU
 	name, values := cpuinfo.GetInformations()
+	hwdInfos.cpuTemp = values["cpu.temp"]
+	for k, v := range values {
+		if strings.Contains(k, "Core") {
+			hwdInfos.coreTemps = append(hwdInfos.coreTemps, v)
+		}
+		if strings.Contains(k, "Package") {
+			hwdInfos.cpuTemp2 = v
+		}
+	}
 
 	// GPU
 	name, values = nvidia.GetInformations()
@@ -107,6 +119,7 @@ func main() {
 	win.Connect("destroy", func() {
 		gtk.MainQuit()
 	})
+	win.SetBorderWidth(6)
 
 	mainGrid, err := gtk.GridNew()
 	if err != nil {
@@ -139,7 +152,7 @@ func main() {
 	cpuGrid.Add(fields.cpuName)
 	cpuGrid.Add(createRow("Clock:", fields.cpuClock))
 	cpuGrid.Add(createRow("Temp:", fields.cpuTemp))
-	cpuGrid.Add(createRow("CCD Temp:", fields.cpuTemp2))
+	cpuGrid.Add(createRow("Temp(Package/CCD):", fields.cpuTemp2))
 	cpuGrid.Add(createRow("Util:", fields.cpuUtil))
 	// TODO Core Clocks list
 
@@ -180,6 +193,10 @@ func main() {
 	go func() {
 		for true {
 			infos := updateInfos()
+			//CPU
+			fields.cpuTemp.SetText(infos.cpuTemp)
+			fields.cpuTemp2.SetText(infos.cpuTemp2)
+
 			//GPU
 			fields.gpuName.SetText(infos.gpuName)
 			fields.gpuClock.SetText(infos.gpuClock)

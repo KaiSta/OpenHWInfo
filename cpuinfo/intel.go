@@ -2,57 +2,47 @@ package cpuinfo
 
 import (
 	"bytes"
-	"encoding/json"
 	"log"
 	"os/exec"
+	"strings"
 )
 
 func GetInformations() (string, map[string]string) {
 	log.Println("intel infos")
 	var result = make(map[string]string)
 
-	cmd := exec.Command("sensors", "-j")
+	cmd := exec.Command("sensors")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
 	if err != nil {
 		log.Fatal(err)
 	}
-	str := out.Bytes()
+	str := out.String()
 
-	var data map[string]interface{}
-	err = json.Unmarshal(str, &data)
-	if err != nil {
-		log.Fatal("Error during Unmarshal():", err)
+	lines := strings.Split(str, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "CPU") {
+			elements := strings.Split(line, ":")
+			result["cpu.temp"] = strings.TrimLeft(elements[1], " +")
+		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") {
+			elements := strings.Split(line, ":")
+			temp := ""
+			println("elements[1]", elements[1])
+			for _, c := range elements[1] {
+				if c == 'C' {
+					break
+				}
+				temp += string(c)
+			}
+			print(temp)
+			result["cpu."+elements[0]] = strings.TrimLeft(temp, " +")
+		}
 	}
-	for k, v := range data {
-		println("key", k)
-		println("val", v)
-	}
 
-	// if skylake, ok := data["pch_skylake-virtual-0"]; ok {
-	// 	print(skylake)
-	// 	// m := skylake.(map[string]interface{})
-	// 	// tempEntry := m["temp1"].(map[string]interface{})
-	// 	// result["cpu.temp"] = tempEntry["temp1_input"].(string)
-	// }
-	// if coretemp, ok := data["coretemp-isa-0000"]; ok {
-	// 	coreTempEntry := coretemp.(map[string]interface{})
-	// 	packageEntry := coreTempEntry["Package id 0"].(map[string]interface{})
-	// 	result["cpu.package"] = packageEntry["temp1_input"].(string)
-
-	// 	for key, val := range coreTempEntry {
-	// 		if strings.Contains(key, "Core") {
-	// 			coreEntry := val.(map[string]interface{})
-	// 			for k, v := range coreEntry {
-	// 				if strings.Contains(k, "input") {
-	// 					result[key] = v.(string)
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-	// }
 	log.Println("intel infos END")
-	print(result)
+	for k, v := range result {
+		println(k, v)
+	}
 	return "unknown", result
 }
