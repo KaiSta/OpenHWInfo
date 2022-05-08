@@ -27,7 +27,7 @@ func GetInformations() (string, map[string]string) {
 		if strings.HasPrefix(line, "CPU") {
 			elements := strings.Split(line, ":")
 			result["cpu.temp"] = strings.TrimLeft(elements[1], " +")
-		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") {
+		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") || strings.Contains(line, "Tccd") {
 			elements := strings.Split(line, ":")
 			temp := ""
 			println("elements[1]", elements[1])
@@ -39,6 +39,9 @@ func GetInformations() (string, map[string]string) {
 			}
 			print(temp)
 			result["cpu."+elements[0]] = strings.TrimLeft(temp, " +")
+		} else if strings.HasPrefix(line, "Tctl") {
+			elements := strings.Split(line, ":")
+			result["cpu.temp"] = strings.TrimLeft(elements[1], " +")
 		}
 	}
 
