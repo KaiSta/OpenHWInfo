@@ -75,6 +75,9 @@ func updateInfos() hardwareInfos {
 		}
 	}
 	hwdInfos.cpuClock = hwdInfos.coreClocks[0]
+	if hwdInfos.cpuTemp == "" {
+		hwdInfos.cpuTemp = hwdInfos.coreTemps[0]
+	}
 
 	// GPU
 	name, values = nvidia.GetInformations()
