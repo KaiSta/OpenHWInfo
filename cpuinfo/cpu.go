@@ -157,4 +157,6 @@ func PopulateContainer(grid *gtk.Grid) bool {
 		chipsetTemp, _ := gtk.LabelNew(el)
 		grid.Add(createRow("PCH", chipsetTemp))
 	}
+
+	return true
 }

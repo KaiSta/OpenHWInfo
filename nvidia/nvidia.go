@@ -5,6 +5,8 @@ import (
 	"log"
 	"os/exec"
 	"strings"
+
+	"github.com/gotk3/gotk3/gtk"
 )
 
 func GetInformations() (string, map[string]string) {
@@ -51,4 +53,94 @@ func GetInformations() (string, map[string]string) {
 
 	return fields[0], data
 
+}
+
+func clearGrid(grid *gtk.Grid) {
+	for true {
+		_, err := grid.GetChildAt(0, 1)
+		if err == nil {
+			grid.RemoveRow(1)
+		} else {
+			return
+		}
+	}
+}
+
+func createRow(name string, item *gtk.Label) *gtk.Grid {
+	rowGrid, _ := gtk.GridNew()
+	rowGrid.SetOrientation(gtk.ORIENTATION_HORIZONTAL)
+
+	nameLabel, _ := gtk.LabelNew(name)
+	rowGrid.Add(nameLabel)
+	rowGrid.Add(item)
+	return rowGrid
+}
+
+func PopulateContainer(grid *gtk.Grid) bool {
+	clearGrid(grid)
+	name, elements := GetInformations()
+
+	if len(name) == 0 {
+		return false
+	}
+
+	nameLabel, _ := gtk.LabelNew(name)
+	grid.Add(nameLabel)
+
+	if x, ok := elements["gpu.clock"]; ok {
+		clockLabel, _ := gtk.LabelNew(x)
+		grid.Add(createRow("Clock", clockLabel))
+	}
+
+	if x, ok := elements["memory.clock"]; ok {
+		memLabel, _ := gtk.LabelNew(x)
+		grid.Add(createRow("RAM Clock", memLabel))
+	}
+
+	if x, ok := elements["gpu.temp"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("Temp", l))
+	}
+
+	if x, ok := elements["memory.temp"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("RAM Temp", l))
+	}
+
+	if x, ok := elements["gpu.power.draw"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("PowerDraw", l))
+	}
+
+	if x, ok := elements["gpu.power.max"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("PowerMax", l))
+	}
+
+	if x, ok := elements["gpu.power.limit"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("PowerLimit", l))
+	}
+
+	if x, ok := elements["gpu.usage"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("Util", l))
+	}
+
+	if x, ok := elements["fan.speed"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("FanSpeed", l))
+	}
+
+	if x, ok := elements["memory.used"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("MemoryUsed", l))
+	}
+
+	if x, ok := elements["memory.total"]; ok {
+		l, _ := gtk.LabelNew(x)
+		grid.Add(createRow("MemoryTotal", l))
+	}
+
+	return true
 }
