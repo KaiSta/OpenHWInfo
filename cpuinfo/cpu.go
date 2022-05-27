@@ -13,7 +13,7 @@ import (
 )
 
 func GetInformations() (string, map[string]string) {
-	log.Println("intel infos")
+	log.Println("CPU infos")
 	var result = make(map[string]string)
 
 	cmd := exec.Command("sensors")
@@ -33,14 +33,12 @@ func GetInformations() (string, map[string]string) {
 		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") || strings.Contains(line, "Tccd") {
 			elements := strings.Split(line, ":")
 			temp := ""
-			println("elements[1]", elements[1])
 			for _, c := range elements[1] {
 				if c == 'C' {
 					break
 				}
 				temp += string(c)
 			}
-			print(temp)
 			result["cpu."+elements[0]] = strings.TrimLeft(temp, " +")
 		} else if strings.HasPrefix(line, "Tctl") {
 			elements := strings.Split(line, ":")
@@ -63,7 +61,7 @@ func GetInformations() (string, map[string]string) {
 		if strings.HasPrefix(line, "model name") {
 			name = strings.Split(line, ":")[1]
 		} else if strings.HasPrefix(line, "cpu MHz") {
-			result[fmt.Sprintf("cpu.clock%d", cpus)] = strings.Split(line, ":")[1]
+			result[fmt.Sprintf("cpu.clock%d", cpus)] = strings.TrimLeft(strings.Split(line, ":")[1], " ")
 			cpus++
 		}
 	}
@@ -74,9 +72,11 @@ func GetInformations() (string, map[string]string) {
 func getMaxClock(elements map[string]string) string {
 	var vals []float64
 	for k, v := range elements {
-		if strings.HasPrefix(k, "cpu.clock") {
+		if strings.Contains(k, "cpu.clock") {
 			if n, err := strconv.ParseFloat(v, 64); err == nil {
 				vals = append(vals, n)
+			} else {
+				log.Println(err)
 			}
 		}
 	}
@@ -92,6 +92,7 @@ func getMaxClock(elements map[string]string) string {
 func createRow(name string, item *gtk.Label) *gtk.Grid {
 	rowGrid, _ := gtk.GridNew()
 	rowGrid.SetOrientation(gtk.ORIENTATION_HORIZONTAL)
+	rowGrid.SetColumnSpacing(10)
 
 	nameLabel, _ := gtk.LabelNew(name)
 	rowGrid.Add(nameLabel)
@@ -101,8 +102,8 @@ func createRow(name string, item *gtk.Label) *gtk.Grid {
 
 func clearGrid(grid *gtk.Grid) {
 	for true {
-		_, err := grid.GetChildAt(0, 1)
-		if err == nil {
+		el, _ := grid.GetChildAt(0, 1)
+		if el != nil {
 			grid.RemoveRow(1)
 		} else {
 			return
@@ -110,20 +111,27 @@ func clearGrid(grid *gtk.Grid) {
 	}
 }
 
+var labelMap map[string]*gtk.Label
+
 func PopulateContainer(grid *gtk.Grid) bool {
-	clearGrid(grid)
+	log.Println("Starting to populate cpu grid")
 	name, elements := GetInformations()
 
 	if len(name) == 0 {
 		return false
 	}
+
+	labelMap = make(map[string]*gtk.Label)
+
 	nameLabel, _ := gtk.LabelNew(name)
 	grid.Add(nameLabel)
 
 	cpuClock, _ := gtk.LabelNew(getMaxClock(elements))
+	labelMap["Clock"] = cpuClock
 	grid.Add(createRow("Clock", cpuClock))
 
 	cpuTemp, _ := gtk.LabelNew(elements["cpu.temp"])
+	labelMap["Temp"] = cpuTemp
 	grid.Add(createRow("Temp", cpuTemp))
 
 	count := 0
@@ -136,17 +144,24 @@ func PopulateContainer(grid *gtk.Grid) bool {
 	for k, x := range elements {
 		if strings.Contains(k, "Package") {
 			packageTemp, _ := gtk.LabelNew(x)
+			labelMap["Package"] = packageTemp
 			grid.Add(createRow("Package", packageTemp))
 		} else if strings.Contains(k, "ccd") {
 			ccdTemp, _ := gtk.LabelNew(x)
-			grid.Add(createRow(fmt.Sprintf("CCD%d", count), ccdTemp))
+			labelName := fmt.Sprintf("CCD %d", count)
+			labelMap[labelName] = ccdTemp
+			grid.Add(createRow(labelName, ccdTemp))
 			count++
 		} else if strings.Contains(k, "Core") {
 			coreTemp, _ := gtk.LabelNew(x)
-			coreGrid.Add(createRow(k, coreTemp))
+			els := strings.Split(k, ".")
+			labelMap[els[1]] = coreTemp
+			coreGrid.Add(createRow(els[1], coreTemp))
 		} else if strings.Contains(k, "clock") {
 			clock, _ := gtk.LabelNew(x)
-			clockGrid.Add(createRow(fmt.Sprintf("Clock %d", clockCount), clock))
+			labelName := fmt.Sprintf("Clock %d", clockCount)
+			labelMap[labelName] = clock
+			clockGrid.Add(createRow(labelName, clock))
 			clockCount++
 		}
 	}
@@ -155,8 +170,55 @@ func PopulateContainer(grid *gtk.Grid) bool {
 
 	if el, ok := elements["cpu.pch"]; ok {
 		chipsetTemp, _ := gtk.LabelNew(el)
+		labelMap["PCH"] = chipsetTemp
 		grid.Add(createRow("PCH", chipsetTemp))
 	}
 
 	return true
+}
+
+func Update() {
+	name, elements := GetInformations()
+
+	if len(name) == 0 {
+		return
+	}
+
+	for k, v := range labelMap {
+		if strings.Contains(k, "PCH") {
+			v.SetText(elements["cpu.pch"])
+		} else if strings.Contains(k, "Clock") {
+			v.SetText(getMaxClock(elements))
+		} else if strings.Contains(k, "Temp") {
+			v.SetText(elements["cpu.temp"])
+		} else if strings.Contains(k, "Package") {
+			for x, y := range elements {
+				if strings.Contains(x, "Package") {
+					v.SetText(y)
+				}
+			}
+		} else if strings.Contains(k, "CCD") {
+			els := strings.Split(k, " ")
+			for x, y := range elements {
+				if strings.Contains(x, "ccd") && strings.Contains(x, els[1]) {
+					v.SetText(y)
+				}
+			}
+		} else if strings.Contains(k, "Core") {
+			els := strings.Split(k, " ")
+			for x, y := range elements {
+				if strings.Contains(x, "Core") && strings.Contains(x, els[1]) {
+					v.SetText(y)
+				}
+			}
+		} else if strings.Contains(k, "Clock") {
+			els := strings.Split(k, " ")
+			for x, y := range elements {
+				if strings.Contains(x, "Clock") && strings.Contains(x, els[1]) {
+					v.SetText(y)
+				}
+			}
+		}
+	}
+
 }

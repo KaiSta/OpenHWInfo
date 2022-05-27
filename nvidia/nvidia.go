@@ -57,8 +57,8 @@ func GetInformations() (string, map[string]string) {
 
 func clearGrid(grid *gtk.Grid) {
 	for true {
-		_, err := grid.GetChildAt(0, 1)
-		if err == nil {
+		el, _ := grid.GetChildAt(0, 1)
+		if el != nil {
 			grid.RemoveRow(1)
 		} else {
 			return
@@ -76,71 +76,126 @@ func createRow(name string, item *gtk.Label) *gtk.Grid {
 	return rowGrid
 }
 
+var labelMap map[string]*gtk.Label
+
 func PopulateContainer(grid *gtk.Grid) bool {
-	clearGrid(grid)
 	name, elements := GetInformations()
 
 	if len(name) == 0 {
 		return false
 	}
 
+	labelMap = make(map[string]*gtk.Label)
+
 	nameLabel, _ := gtk.LabelNew(name)
 	grid.Add(nameLabel)
 
 	if x, ok := elements["gpu.clock"]; ok {
 		clockLabel, _ := gtk.LabelNew(x)
+		labelMap["Clock"] = clockLabel
 		grid.Add(createRow("Clock", clockLabel))
 	}
 
 	if x, ok := elements["memory.clock"]; ok {
 		memLabel, _ := gtk.LabelNew(x)
+		labelMap["RAM Clock"] = memLabel
 		grid.Add(createRow("RAM Clock", memLabel))
 	}
 
 	if x, ok := elements["gpu.temp"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["Temp"] = l
 		grid.Add(createRow("Temp", l))
 	}
 
 	if x, ok := elements["memory.temp"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["RAM Temp"] = l
 		grid.Add(createRow("RAM Temp", l))
 	}
 
 	if x, ok := elements["gpu.power.draw"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["PowerDraw"] = l
 		grid.Add(createRow("PowerDraw", l))
 	}
 
 	if x, ok := elements["gpu.power.max"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["PowerMax"] = l
 		grid.Add(createRow("PowerMax", l))
 	}
 
 	if x, ok := elements["gpu.power.limit"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["PowerLimit"] = l
 		grid.Add(createRow("PowerLimit", l))
 	}
 
 	if x, ok := elements["gpu.usage"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["Util"] = l
 		grid.Add(createRow("Util", l))
 	}
 
 	if x, ok := elements["fan.speed"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["FanSpeed"] = l
 		grid.Add(createRow("FanSpeed", l))
 	}
 
 	if x, ok := elements["memory.used"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["MemoryUsed"] = l
 		grid.Add(createRow("MemoryUsed", l))
 	}
 
 	if x, ok := elements["memory.total"]; ok {
 		l, _ := gtk.LabelNew(x)
+		labelMap["MemoryTotal"] = l
 		grid.Add(createRow("MemoryTotal", l))
 	}
 
 	return true
+}
+
+func Update() {
+	name, elements := GetInformations()
+
+	if len(name) == 0 {
+		return
+	}
+
+	clock := labelMap["Clock"]
+	clock.SetText(elements["gpu.clock"])
+
+	ramClock := labelMap["RAM Clock"]
+	ramClock.SetText(elements["memory.clock"])
+
+	temp := labelMap["Temp"]
+	temp.SetText(elements["gpu.temp"])
+
+	ramTemp := labelMap["RAM Temp"]
+	ramTemp.SetText(elements["memory.temp"])
+
+	powerdraw := labelMap["PowerDraw"]
+	powerdraw.SetText(elements["gpu.power.draw"])
+
+	powerMax := labelMap["PowerMax"]
+	powerMax.SetText(elements["gpu.power.max"])
+
+	powerLimit := labelMap["PowerLimit"]
+	powerLimit.SetText(elements["gpu.power.limit"])
+
+	util := labelMap["Util"]
+	util.SetText(elements["gpu.usage"])
+
+	fanspeed := labelMap["FanSpeed"]
+	fanspeed.SetText(elements["fan.speed"])
+
+	memused := labelMap["MemoryUsed"]
+	memused.SetText(elements["memory.used"])
+
+	memtotal := labelMap["MemoryTotal"]
+	memtotal.SetText(elements["memory.total"])
 }

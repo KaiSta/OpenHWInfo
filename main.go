@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"strings"
 	"time"
 
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
@@ -10,113 +9,23 @@ import (
 	"github.com/gotk3/gotk3/gtk"
 )
 
-type hardwareInfos struct {
-	cpuName           string
-	cpuClock          string
-	cpuTemp           string
-	cpuTemp2          string
-	coreTemps         []string
-	cpuUtil           string
-	coreClocks        []string
-	cpuPCH            string
-	memoryMax         string
-	memoryCurrent     string
-	gpuName           string
-	gpuClock          string
-	gpuMemClock       string
-	gpuTemp           string
-	gpuPowerDraw      string
-	gpuPowerDrawMax   string
-	gpuPowerDrawLimit string
-	gpuUtil           string
-	gpuMemTemp        string
-	gpuMemTotal       string
-	gpuMemCurrent     string
-	gpuFanSpeed       string
-}
-
-type guiFields struct {
-	cpuName           *gtk.Label
-	cpuClock          *gtk.Label
-	cpuTemp           *gtk.Label
-	cpuTemp2          *gtk.Label
-	cpuUtil           *gtk.Label
-	coreTemps         []*gtk.Label
-	coreClocks        []*gtk.Label
-	cpuPCH            *gtk.Label
-	memoryMax         *gtk.Label
-	memoryCurrent     *gtk.Label
-	gpuName           *gtk.Label
-	gpuClock          *gtk.Label
-	gpuMemClock       *gtk.Label
-	gpuTemp           *gtk.Label
-	gpuPowerDraw      *gtk.Label
-	gpuPowerDrawMax   *gtk.Label
-	gpuPowerDrawLimit *gtk.Label
-	gpuUtil           *gtk.Label
-	gpuMemTemp        *gtk.Label
-	gpuMemTotal       *gtk.Label
-	gpuMemCurrent     *gtk.Label
-	gpuFanSpeed       *gtk.Label
-}
-
-func updateInfos() hardwareInfos {
-	var hwdInfos hardwareInfos
-
-	// CPU
-	name, values := cpuinfo.GetInformations()
-	hwdInfos.cpuName = name
-	hwdInfos.cpuTemp = values["cpu.temp"]
-	hwdInfos.cpuPCH = values["cpu.pch"]
-	for k, v := range values {
-		if strings.Contains(k, "Core") {
-			hwdInfos.coreTemps = append(hwdInfos.coreTemps, v)
-		} else if strings.Contains(k, "Package") {
-			hwdInfos.cpuTemp2 = v
-		} else if strings.HasPrefix(k, "cpu.clock") {
-			hwdInfos.coreClocks = append(hwdInfos.coreClocks, v)
+func clearGrid(grid *gtk.Grid) {
+	for true {
+		el, _ := grid.GetChildAt(0, 1)
+		if el != nil {
+			grid.RemoveRow(1)
+		} else {
+			return
 		}
 	}
-	hwdInfos.cpuClock = hwdInfos.coreClocks[0]
-	if hwdInfos.cpuTemp == "" {
-		hwdInfos.cpuTemp = hwdInfos.coreTemps[0]
-	}
-
-	// GPU
-	name, values = nvidia.GetInformations()
-	if name != "" {
-		hwdInfos.gpuName = name
-		hwdInfos.gpuClock = values["gpu.clock"]
-		hwdInfos.gpuMemClock = values["memory.clock"]
-		hwdInfos.gpuTemp = values["gpu.temp"]
-		hwdInfos.gpuPowerDraw = values["gpu.power.draw"]
-		hwdInfos.gpuPowerDrawMax = values["gpu.power.max"]
-		hwdInfos.gpuPowerDrawLimit = values["gpu.power.limit"]
-		hwdInfos.gpuUtil = values["gpu.usage"]
-		hwdInfos.gpuMemTemp = values["memory.temp"]
-		hwdInfos.gpuMemTotal = values["memory.total"]
-		hwdInfos.gpuFanSpeed = values["fan.speed"]
-		hwdInfos.gpuMemCurrent = values["memory.used"]
-	}
-
-	return hwdInfos
-}
-
-func createRow(name string, item *gtk.Label) *gtk.Grid {
-	rowGrid, _ := gtk.GridNew()
-	rowGrid.SetOrientation(gtk.ORIENTATION_HORIZONTAL)
-
-	nameLabel, _ := gtk.LabelNew(name)
-	rowGrid.Add(nameLabel)
-	rowGrid.Add(item)
-	return rowGrid
 }
 
 func main() {
-	var fields guiFields
 
 	// Initialize GTK without parsing any command line arguments.
 	gtk.Init(nil)
+
+	log.Println("Starting OpenHWInfo")
 
 	// Create a new toplevel window, set its title, and connect it to the
 	// "destroy" signal to exit the GTK main loop when it is destroyed.
@@ -130,102 +39,42 @@ func main() {
 	})
 	win.SetBorderWidth(6)
 
-	mainGrid, err := gtk.GridNew()
-	if err != nil {
-		log.Fatal("Unable to create grid:", err)
-	}
+	log.Println("Created Window")
+
+	var mainGrid *gtk.Grid
+	mainGrid, _ = gtk.GridNew()
 	mainGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
 
-	fields.cpuName, _ = gtk.LabelNew("CPUNAME")
-	fields.cpuClock, _ = gtk.LabelNew("CPUCLOCK")
-	fields.cpuTemp, _ = gtk.LabelNew("CPUTEMP")
-	fields.cpuTemp2, _ = gtk.LabelNew("CPUTEMP2")
-	fields.cpuUtil, _ = gtk.LabelNew("CPUUTIL")
-	fields.cpuPCH, _ = gtk.LabelNew("CPUPCH")
-	fields.memoryMax, _ = gtk.LabelNew("MEMORYMAX")
-	fields.memoryCurrent, _ = gtk.LabelNew("MEMORYCURRENT")
-	fields.gpuName, _ = gtk.LabelNew("GPUNAME")
-	fields.gpuClock, _ = gtk.LabelNew("GPUCLOCK")
-	fields.gpuMemClock, _ = gtk.LabelNew("GPUMEMCLOCK")
-	fields.gpuTemp, _ = gtk.LabelNew("GPUTEMP")
-	fields.gpuPowerDraw, _ = gtk.LabelNew("GPUPOWERDRAW")
-	fields.gpuPowerDrawMax, _ = gtk.LabelNew("GPUPOWERDRAWMAX")
-	fields.gpuPowerDrawLimit, _ = gtk.LabelNew("GPUPOWERDRAWLIMIT")
-	fields.gpuUtil, _ = gtk.LabelNew("GPUUTIL")
-	fields.gpuMemTemp, _ = gtk.LabelNew("GPUMEMTEMP")
-	fields.gpuMemCurrent, _ = gtk.LabelNew("GPUMEMCURRENT")
-	fields.gpuMemTotal, _ = gtk.LabelNew("GPUMEMTOTAL")
-	fields.gpuFanSpeed, _ = gtk.LabelNew("GPUFANSPEED")
-
-	cpuGrid, err := gtk.GridNew()
+	cpuGrid, _ := gtk.GridNew()
 	cpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	cpuGrid.Add(fields.cpuName)
-	cpuGrid.Add(createRow("Clock:", fields.cpuClock))
-	cpuGrid.Add(createRow("Temp:", fields.cpuTemp))
-	cpuGrid.Add(createRow("Temp(Package/CCD):", fields.cpuTemp2))
-	cpuGrid.Add(createRow("PCH:", fields.cpuPCH))
-	cpuGrid.Add(createRow("Util:", fields.cpuUtil))
-	// TODO Core Clocks list
+	if cpuinfo.PopulateContainer(cpuGrid) {
+		log.Println("Populated CPU grid")
+		mainGrid.Add(cpuGrid)
+		empty, _ := gtk.LabelNew("")
+		mainGrid.Add(empty)
+		log.Println("CPU grid added")
+	}
 
-	memGrid, err := gtk.GridNew()
-	memGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	memLabel, _ := gtk.LabelNew("Memory")
-	memGrid.Add(memLabel)
-	memGrid.Add(createRow("Usage:", fields.memoryCurrent))
-	memGrid.Add(createRow("Max:", fields.memoryMax))
-
-	gpuGrid, err := gtk.GridNew()
+	gpuGrid, _ := gtk.GridNew()
 	gpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	gpuGrid.Add(fields.gpuName)
-	gpuGrid.Add(createRow("Clock:", fields.gpuClock))
-	gpuGrid.Add(createRow("MemClock:", fields.gpuMemClock))
-	gpuGrid.Add(createRow("Temp:", fields.gpuTemp))
-	gpuGrid.Add(createRow("Util:", fields.gpuUtil))
-	gpuGrid.Add(createRow("PowerDraw:", fields.gpuPowerDraw))
-	gpuGrid.Add(createRow("PowerMax:", fields.gpuPowerDrawMax))
-	gpuGrid.Add(createRow("PowerLimit:", fields.gpuPowerDrawLimit))
-	gpuGrid.Add(createRow("Mem Temp:", fields.gpuMemTemp))
-	gpuGrid.Add(createRow("Mem Current:", fields.gpuMemCurrent))
-	gpuGrid.Add(createRow("Mem Total:", fields.gpuMemTotal))
-	gpuGrid.Add(createRow("Fan Speed:", fields.gpuFanSpeed))
-
-	empty, err := gtk.LabelNew("")
-	empty2, err := gtk.LabelNew("")
-
-	mainGrid.Add(cpuGrid)
-	mainGrid.Add(empty)
-	mainGrid.Add(memGrid)
-	mainGrid.Add(empty2)
-	mainGrid.Add(gpuGrid)
+	if nvidia.PopulateContainer(gpuGrid) {
+		log.Println("Populated GPU grid")
+		mainGrid.Add(gpuGrid)
+		empty, _ := gtk.LabelNew("")
+		mainGrid.Add(empty)
+		log.Println("GPU grid added")
+	}
 
 	win.Add(mainGrid)
+	log.Println("Created main grid")
 
 	// Create a new label widget to show in the window.
 	go func() {
-		for true {
-			infos := updateInfos()
-			//CPU
-			fields.cpuName.SetText(infos.cpuName)
-			fields.cpuClock.SetText(infos.cpuClock)
-			fields.cpuTemp.SetText(infos.cpuTemp)
-			fields.cpuTemp2.SetText(infos.cpuTemp2)
-			fields.cpuPCH.SetText(infos.cpuPCH)
+		for {
+			cpuinfo.Update()
+			nvidia.Update()
 
-			//GPU
-			fields.gpuName.SetText(infos.gpuName)
-			fields.gpuClock.SetText(infos.gpuClock)
-			fields.gpuMemClock.SetText(infos.gpuMemClock)
-			fields.gpuPowerDraw.SetText(infos.gpuPowerDraw)
-			fields.gpuPowerDrawMax.SetText(infos.gpuPowerDrawMax)
-			fields.gpuPowerDrawLimit.SetText(infos.gpuPowerDrawLimit)
-			fields.gpuTemp.SetText(infos.gpuTemp)
-			fields.gpuUtil.SetText(infos.gpuUtil)
-			fields.gpuFanSpeed.SetText(infos.gpuFanSpeed)
-			fields.gpuMemTemp.SetText(infos.gpuMemTemp)
-			fields.gpuMemCurrent.SetText(infos.gpuMemCurrent)
-			fields.gpuMemTotal.SetText(infos.gpuMemTotal)
-
-			time.Sleep(3 * time.Second)
+			time.Sleep(5 * time.Second)
 		}
 	}()
 
