@@ -18,6 +18,7 @@ type hardwareInfos struct {
 	coreTemps         []string
 	cpuUtil           string
 	coreClocks        []string
+	cpuPCH            string
 	memoryMax         string
 	memoryCurrent     string
 	gpuName           string
@@ -42,6 +43,7 @@ type guiFields struct {
 	cpuUtil           *gtk.Label
 	coreTemps         []*gtk.Label
 	coreClocks        []*gtk.Label
+	cpuPCH            *gtk.Label
 	memoryMax         *gtk.Label
 	memoryCurrent     *gtk.Label
 	gpuName           *gtk.Label
@@ -65,6 +67,7 @@ func updateInfos() hardwareInfos {
 	name, values := cpuinfo.GetInformations()
 	hwdInfos.cpuName = name
 	hwdInfos.cpuTemp = values["cpu.temp"]
+	hwdInfos.cpuPCH = values["cpu.pch"]
 	for k, v := range values {
 		if strings.Contains(k, "Core") {
 			hwdInfos.coreTemps = append(hwdInfos.coreTemps, v)
@@ -133,25 +136,26 @@ func main() {
 	}
 	mainGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
 
-	fields.cpuName, err = gtk.LabelNew("CPUNAME")
-	fields.cpuClock, err = gtk.LabelNew("CPUCLOCK")
-	fields.cpuTemp, err = gtk.LabelNew("CPUTEMP")
-	fields.cpuTemp2, err = gtk.LabelNew("CPUTEMP2")
-	fields.cpuUtil, err = gtk.LabelNew("CPUUTIL")
-	fields.memoryMax, err = gtk.LabelNew("MEMORYMAX")
-	fields.memoryCurrent, err = gtk.LabelNew("MEMORYCURRENT")
-	fields.gpuName, err = gtk.LabelNew("GPUNAME")
-	fields.gpuClock, err = gtk.LabelNew("GPUCLOCK")
-	fields.gpuMemClock, err = gtk.LabelNew("GPUMEMCLOCK")
-	fields.gpuTemp, err = gtk.LabelNew("GPUTEMP")
-	fields.gpuPowerDraw, err = gtk.LabelNew("GPUPOWERDRAW")
-	fields.gpuPowerDrawMax, err = gtk.LabelNew("GPUPOWERDRAWMAX")
-	fields.gpuPowerDrawLimit, err = gtk.LabelNew("GPUPOWERDRAWLIMIT")
-	fields.gpuUtil, err = gtk.LabelNew("GPUUTIL")
-	fields.gpuMemTemp, err = gtk.LabelNew("GPUMEMTEMP")
-	fields.gpuMemCurrent, err = gtk.LabelNew("GPUMEMCURRENT")
-	fields.gpuMemTotal, err = gtk.LabelNew("GPUMEMTOTAL")
-	fields.gpuFanSpeed, err = gtk.LabelNew("GPUFANSPEED")
+	fields.cpuName, _ = gtk.LabelNew("CPUNAME")
+	fields.cpuClock, _ = gtk.LabelNew("CPUCLOCK")
+	fields.cpuTemp, _ = gtk.LabelNew("CPUTEMP")
+	fields.cpuTemp2, _ = gtk.LabelNew("CPUTEMP2")
+	fields.cpuUtil, _ = gtk.LabelNew("CPUUTIL")
+	fields.cpuPCH, _ = gtk.LabelNew("CPUPCH")
+	fields.memoryMax, _ = gtk.LabelNew("MEMORYMAX")
+	fields.memoryCurrent, _ = gtk.LabelNew("MEMORYCURRENT")
+	fields.gpuName, _ = gtk.LabelNew("GPUNAME")
+	fields.gpuClock, _ = gtk.LabelNew("GPUCLOCK")
+	fields.gpuMemClock, _ = gtk.LabelNew("GPUMEMCLOCK")
+	fields.gpuTemp, _ = gtk.LabelNew("GPUTEMP")
+	fields.gpuPowerDraw, _ = gtk.LabelNew("GPUPOWERDRAW")
+	fields.gpuPowerDrawMax, _ = gtk.LabelNew("GPUPOWERDRAWMAX")
+	fields.gpuPowerDrawLimit, _ = gtk.LabelNew("GPUPOWERDRAWLIMIT")
+	fields.gpuUtil, _ = gtk.LabelNew("GPUUTIL")
+	fields.gpuMemTemp, _ = gtk.LabelNew("GPUMEMTEMP")
+	fields.gpuMemCurrent, _ = gtk.LabelNew("GPUMEMCURRENT")
+	fields.gpuMemTotal, _ = gtk.LabelNew("GPUMEMTOTAL")
+	fields.gpuFanSpeed, _ = gtk.LabelNew("GPUFANSPEED")
 
 	cpuGrid, err := gtk.GridNew()
 	cpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
@@ -159,6 +163,7 @@ func main() {
 	cpuGrid.Add(createRow("Clock:", fields.cpuClock))
 	cpuGrid.Add(createRow("Temp:", fields.cpuTemp))
 	cpuGrid.Add(createRow("Temp(Package/CCD):", fields.cpuTemp2))
+	cpuGrid.Add(createRow("PCH:", fields.cpuPCH))
 	cpuGrid.Add(createRow("Util:", fields.cpuUtil))
 	// TODO Core Clocks list
 
@@ -204,6 +209,7 @@ func main() {
 			fields.cpuClock.SetText(infos.cpuClock)
 			fields.cpuTemp.SetText(infos.cpuTemp)
 			fields.cpuTemp2.SetText(infos.cpuTemp2)
+			fields.cpuPCH.SetText(infos.cpuPCH)
 
 			//GPU
 			fields.gpuName.SetText(infos.gpuName)
