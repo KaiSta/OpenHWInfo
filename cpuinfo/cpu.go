@@ -144,12 +144,10 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 
 	count := 0
 	clockCount := 0
-	coreNameGrid, _ := gtk.GridNew()
-	coreCurrGrid, _ := gtk.GridNew()
-	coreNameGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	coreCurrGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	// clockGrid, _ := gtk.GridNew()
-	// clockGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	var coreNames []*gtk.Label
+	var coreValues []*gtk.Label
+	var clockNames []*gtk.Label
+	var clockValues []*gtk.Label
 
 	for k, x := range elements {
 		if strings.Contains(k, "Package") {
@@ -173,22 +171,32 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 			els := strings.Split(k, ".")
 			labelMap[els[1]] = coreTemp
 			labelName, _ := gtk.LabelNew(els[1])
-			coreNameGrid.Add(labelName)
-			coreCurrGrid.Add(coreTemp)
+			coreNames = append(coreNames, labelName)
+			coreValues = append(coreValues, coreTemp)
 			// coreGrid.Add(createRow(els[1], coreTemp))
 		} else if strings.Contains(k, "clock") {
 			clock, _ := gtk.LabelNew(x)
 			labelName := fmt.Sprintf("Clock %d", clockCount)
 			labelMap[labelName] = clock
 			label, _ := gtk.LabelNew(labelName)
-			nameGrid.Add(label)
-			currGrid.Add(clock)
+			clockNames = append(clockNames, label)
+			clockValues = append(clockValues, clock)
 			// clockGrid.Add(createRow(labelName, clock))
 			clockCount++
 		}
 	}
-	nameGrid.Add(coreNameGrid)
-	currGrid.Add(coreCurrGrid)
+	for _, l := range coreNames {
+		nameGrid.Add(l)
+	}
+	for _, l := range coreValues {
+		currGrid.Add(l)
+	}
+	for _, l := range clockNames {
+		nameGrid.Add(l)
+	}
+	for _, l := range clockValues {
+		currGrid.Add(l)
+	}
 
 	if el, ok := elements["cpu.pch"]; ok {
 		chipsetTemp, _ := gtk.LabelNew(el)
