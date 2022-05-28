@@ -188,7 +188,15 @@ func Update() {
 		if strings.Contains(k, "PCH") {
 			v.SetText(elements["cpu.pch"])
 		} else if strings.Contains(k, "Clock") {
-			v.SetText(getMaxClock(elements))
+			els := strings.Split(k, " ")
+			if len(els) == 1 {
+				v.SetText(getMaxClock(elements))
+			} else {
+				log.Println("els[1]=",els[1])
+				key := fmt.Sprintf("cpu.clock%s", els[1])
+				log.Println("Searching for key ", key)
+				v.SetText(elements[key])
+			}	
 		} else if strings.Contains(k, "Temp") {
 			v.SetText(elements["cpu.temp"])
 		} else if strings.Contains(k, "Package") {
@@ -208,13 +216,6 @@ func Update() {
 			els := strings.Split(k, " ")
 			for x, y := range elements {
 				if strings.Contains(x, "Core") && strings.Contains(x, els[1]) {
-					v.SetText(y)
-				}
-			}
-		} else if strings.Contains(k, "Clock") {
-			els := strings.Split(k, " ")
-			for x, y := range elements {
-				if strings.Contains(x, "Clock") && strings.Contains(x, els[1]) {
 					v.SetText(y)
 				}
 			}
