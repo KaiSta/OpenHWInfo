@@ -43,23 +43,34 @@ func main() {
 
 	var mainGrid *gtk.Grid
 	mainGrid, _ = gtk.GridNew()
-	mainGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	mainGrid.SetOrientation(gtk.ORIENTATION_HORIZONTAL)
 
-	cpuGrid, _ := gtk.GridNew()
-	cpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	if cpuinfo.PopulateContainer(cpuGrid) {
+	nameGrid, _ := gtk.GridNew()
+	nameGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	currGrid, _ := gtk.GridNew()
+	currGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+
+	mainGrid.Add(nameGrid)
+	mainGrid.Add(currGrid)
+
+	// cpuGrid, _ := gtk.GridNew()
+	// cpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	if cpuinfo.PopulateContainer(nameGrid, currGrid) {
 		log.Println("Populated CPU grid")
-		mainGrid.Add(cpuGrid)
-		empty, _ := gtk.LabelNew("")
-		mainGrid.Add(empty)
+		// mainGrid.Add(cpuGrid)
+		// empty, _ := gtk.LabelNew("")
+		// mainGrid.Add(empty)
 		log.Println("CPU grid added")
 	}
+	empty, _ := gtk.LabelNew("")
+	nameGrid.Add(empty)
+	currGrid.Add(empty)
 
-	gpuGrid, _ := gtk.GridNew()
-	gpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	if nvidia.PopulateContainer(gpuGrid) {
+	// gpuGrid, _ := gtk.GridNew()
+	// gpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	if nvidia.PopulateContainer(nameGrid, currGrid) {
 		log.Println("Populated GPU grid")
-		mainGrid.Add(gpuGrid)
+		// mainGrid.Add(gpuGrid)
 		empty, _ := gtk.LabelNew("")
 		mainGrid.Add(empty)
 		log.Println("GPU grid added")

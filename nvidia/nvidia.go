@@ -78,7 +78,7 @@ func createRow(name string, item *gtk.Label) *gtk.Grid {
 
 var labelMap map[string]*gtk.Label
 
-func PopulateContainer(grid *gtk.Grid) bool {
+func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 	name, elements := GetInformations()
 
 	if len(name) == 0 {
@@ -88,72 +88,107 @@ func PopulateContainer(grid *gtk.Grid) bool {
 	labelMap = make(map[string]*gtk.Label)
 
 	nameLabel, _ := gtk.LabelNew(name)
-	grid.Add(nameLabel)
+	nameGrid.Add(nameLabel)
+	empty, _ := gtk.LabelNew("")
+	currGrid.Add(empty)
 
 	if x, ok := elements["gpu.clock"]; ok {
 		clockLabel, _ := gtk.LabelNew(x)
 		labelMap["Clock"] = clockLabel
-		grid.Add(createRow("Clock", clockLabel))
+		label, _ := gtk.LabelNew("Clock")
+		nameGrid.Add(label)
+		currGrid.Add(clockLabel)
+		// grid.Add(createRow("Clock", clockLabel))
 	}
 
 	if x, ok := elements["memory.clock"]; ok {
 		memLabel, _ := gtk.LabelNew(x)
 		labelMap["RAM Clock"] = memLabel
-		grid.Add(createRow("RAM Clock", memLabel))
+		label, _ := gtk.LabelNew("RAM Clock")
+		nameGrid.Add(label)
+		currGrid.Add(memLabel)
+		// grid.Add(createRow("RAM Clock", memLabel))
 	}
 
 	if x, ok := elements["gpu.temp"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["Temp"] = l
-		grid.Add(createRow("Temp", l))
+		label, _ := gtk.LabelNew("Temp")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("Temp", l))
 	}
 
 	if x, ok := elements["memory.temp"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["RAM Temp"] = l
-		grid.Add(createRow("RAM Temp", l))
+		label, _ := gtk.LabelNew("RAM Temp")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("RAM Temp", l))
 	}
 
 	if x, ok := elements["gpu.power.draw"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["PowerDraw"] = l
-		grid.Add(createRow("PowerDraw", l))
+		label, _ := gtk.LabelNew("PowerDraw")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("PowerDraw", l))
 	}
 
 	if x, ok := elements["gpu.power.max"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["PowerMax"] = l
-		grid.Add(createRow("PowerMax", l))
+		label, _ := gtk.LabelNew("PowerMax")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("PowerMax", l))
 	}
 
 	if x, ok := elements["gpu.power.limit"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["PowerLimit"] = l
-		grid.Add(createRow("PowerLimit", l))
+		label, _ := gtk.LabelNew("PowerLimit")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("PowerLimit", l))
 	}
 
 	if x, ok := elements["gpu.usage"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["Util"] = l
-		grid.Add(createRow("Util", l))
+		label, _ := gtk.LabelNew("Util")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("Util", l))
 	}
 
 	if x, ok := elements["fan.speed"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["FanSpeed"] = l
-		grid.Add(createRow("FanSpeed", l))
+		label, _ := gtk.LabelNew("FanSpeed")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("FanSpeed", l))
 	}
 
 	if x, ok := elements["memory.used"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["MemoryUsed"] = l
-		grid.Add(createRow("MemoryUsed", l))
+		label, _ := gtk.LabelNew("MemoryUsed")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("MemoryUsed", l))
 	}
 
 	if x, ok := elements["memory.total"]; ok {
 		l, _ := gtk.LabelNew(x)
 		labelMap["MemoryTotal"] = l
-		grid.Add(createRow("MemoryTotal", l))
+		label, _ := gtk.LabelNew("MemoryTotal")
+		nameGrid.Add(label)
+		currGrid.Add(l)
+		// grid.Add(createRow("MemoryTotal", l))
 	}
 
 	return true

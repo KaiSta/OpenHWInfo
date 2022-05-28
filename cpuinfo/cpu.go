@@ -113,7 +113,7 @@ func clearGrid(grid *gtk.Grid) {
 
 var labelMap map[string]*gtk.Label
 
-func PopulateContainer(grid *gtk.Grid) bool {
+func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 	log.Println("Starting to populate cpu grid")
 	name, elements := GetInformations()
 
@@ -124,54 +124,79 @@ func PopulateContainer(grid *gtk.Grid) bool {
 	labelMap = make(map[string]*gtk.Label)
 
 	nameLabel, _ := gtk.LabelNew(name)
-	grid.Add(nameLabel)
+	nameGrid.Add(nameLabel)
+	empty, _ := gtk.LabelNew("")
+	currGrid.Add(empty)
 
 	cpuClock, _ := gtk.LabelNew(getMaxClock(elements))
+	labelClock, _ := gtk.LabelNew("Clock")
 	labelMap["Clock"] = cpuClock
-	grid.Add(createRow("Clock", cpuClock))
+	nameGrid.Add(labelClock)
+	currGrid.Add(cpuClock)
+	// grid.Add(createRow("Clock", cpuClock))
 
 	cpuTemp, _ := gtk.LabelNew(elements["cpu.temp"])
+	labelTemp, _ := gtk.LabelNew("Temp")
 	labelMap["Temp"] = cpuTemp
-	grid.Add(createRow("Temp", cpuTemp))
+	nameGrid.Add(labelTemp)
+	currGrid.Add(cpuTemp)
+	// grid.Add(createRow("Temp", cpuTemp))
 
 	count := 0
 	clockCount := 0
-	coreGrid, _ := gtk.GridNew()
-	coreGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	clockGrid, _ := gtk.GridNew()
-	clockGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	coreNameGrid, _ := gtk.GridNew()
+	coreCurrGrid, _ := gtk.GridNew()
+	coreNameGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	coreCurrGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	// clockGrid, _ := gtk.GridNew()
+	// clockGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
 
 	for k, x := range elements {
 		if strings.Contains(k, "Package") {
 			packageTemp, _ := gtk.LabelNew(x)
 			labelMap["Package"] = packageTemp
-			grid.Add(createRow("Package", packageTemp))
+			labelPackage, _ := gtk.LabelNew("Package")
+			nameGrid.Add(labelPackage)
+			currGrid.Add(packageTemp)
+			// grid.Add(createRow("Package", packageTemp))
 		} else if strings.Contains(k, "ccd") {
 			ccdTemp, _ := gtk.LabelNew(x)
 			labelName := fmt.Sprintf("CCD %d", count)
 			labelMap[labelName] = ccdTemp
-			grid.Add(createRow(labelName, ccdTemp))
+			labelCCD, _ := gtk.LabelNew(labelName)
+			nameGrid.Add(labelCCD)
+			currGrid.Add(ccdTemp)
+			// grid.Add(createRow(labelName, ccdTemp))
 			count++
 		} else if strings.Contains(k, "Core") {
 			coreTemp, _ := gtk.LabelNew(x)
 			els := strings.Split(k, ".")
 			labelMap[els[1]] = coreTemp
-			coreGrid.Add(createRow(els[1], coreTemp))
+			labelName, _ := gtk.LabelNew(els[1])
+			coreNameGrid.Add(labelName)
+			coreCurrGrid.Add(coreTemp)
+			// coreGrid.Add(createRow(els[1], coreTemp))
 		} else if strings.Contains(k, "clock") {
 			clock, _ := gtk.LabelNew(x)
 			labelName := fmt.Sprintf("Clock %d", clockCount)
 			labelMap[labelName] = clock
-			clockGrid.Add(createRow(labelName, clock))
+			label, _ := gtk.LabelNew(labelName)
+			nameGrid.Add(label)
+			currGrid.Add(clock)
+			// clockGrid.Add(createRow(labelName, clock))
 			clockCount++
 		}
 	}
-	grid.Add(clockGrid)
-	grid.Add(coreGrid)
+	nameGrid.Add(coreNameGrid)
+	currGrid.Add(coreCurrGrid)
 
 	if el, ok := elements["cpu.pch"]; ok {
 		chipsetTemp, _ := gtk.LabelNew(el)
 		labelMap["PCH"] = chipsetTemp
-		grid.Add(createRow("PCH", chipsetTemp))
+		label, _ := gtk.LabelNew("PCH")
+		nameGrid.Add(label)
+		currGrid.Add(chipsetTemp)
+		// grid.Add(createRow("PCH", chipsetTemp))
 	}
 
 	return true
@@ -192,11 +217,11 @@ func Update() {
 			if len(els) == 1 {
 				v.SetText(getMaxClock(elements))
 			} else {
-				log.Println("els[1]=",els[1])
+				log.Println("els[1]=", els[1])
 				key := fmt.Sprintf("cpu.clock%s", els[1])
 				log.Println("Searching for key ", key)
 				v.SetText(elements[key])
-			}	
+			}
 		} else if strings.Contains(k, "Temp") {
 			v.SetText(elements["cpu.temp"])
 		} else if strings.Contains(k, "Package") {
