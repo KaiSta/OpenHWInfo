@@ -90,7 +90,9 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 	nameLabel, _ := gtk.LabelNew(name)
 	nameGrid.Add(nameLabel)
 	empty, _ := gtk.LabelNew("")
+	empty2, _ := gtk.LabelNew("")
 	currGrid.Add(empty)
+	currGrid.Add(empty2)
 
 	if x, ok := elements["gpu.clock"]; ok {
 		clockLabel, _ := gtk.LabelNew(x)
