@@ -14,10 +14,8 @@ func GetInformations() (string, map[string]string) {
 	probeCmd := exec.Command("which", "nvidia-smi")
 	var probeOut bytes.Buffer
 	probeCmd.Stdout = &probeOut
-	print("hel")
 	err := probeCmd.Run()
-	print("lo")
-	log.Println("Probe result", probeOut.String())
+	log.Println("Nvidia probe result", probeOut.String())
 	if probeOut.String() == "" {
 		log.Println("Probe failed")
 		return "", nil

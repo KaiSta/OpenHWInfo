@@ -14,12 +14,23 @@ import (
 
 func GetInformations() (string, map[string]string) {
 	log.Println("CPU infos")
+
+	probeCmd := exec.Command("which", "sensors")
+	var probeOut bytes.Buffer
+	probeCmd.Stdout = &probeOut
+	err := probeCmd.Run()
+	log.Println("CPU probe result", probeOut.String())
+	if probeOut.String() == "" {
+		log.Println("CPU probe failed, please install lm-sensors package")
+		return "", nil
+	}
+
 	var result = make(map[string]string)
 
 	cmd := exec.Command("sensors")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		log.Fatal(err)
 	}
