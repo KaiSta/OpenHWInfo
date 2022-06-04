@@ -89,28 +89,6 @@ func getMaxClock(elements map[string]string) string {
 	return strconv.FormatFloat(maxVal, 'f', 2, 64)
 }
 
-func createRow(name string, item *gtk.Label) *gtk.Grid {
-	rowGrid, _ := gtk.GridNew()
-	rowGrid.SetOrientation(gtk.ORIENTATION_HORIZONTAL)
-	rowGrid.SetColumnSpacing(10)
-
-	nameLabel, _ := gtk.LabelNew(name)
-	rowGrid.Add(nameLabel)
-	rowGrid.Add(item)
-	return rowGrid
-}
-
-func clearGrid(grid *gtk.Grid) {
-	for true {
-		el, _ := grid.GetChildAt(0, 1)
-		if el != nil {
-			grid.RemoveRow(1)
-		} else {
-			return
-		}
-	}
-}
-
 var labelMap map[string]*gtk.Label
 
 func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
@@ -133,14 +111,12 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 	labelMap["Clock"] = cpuClock
 	nameGrid.Add(labelClock)
 	currGrid.Add(cpuClock)
-	// grid.Add(createRow("Clock", cpuClock))
 
 	cpuTemp, _ := gtk.LabelNew(elements["cpu.temp"])
 	labelTemp, _ := gtk.LabelNew("Temp")
 	labelMap["Temp"] = cpuTemp
 	nameGrid.Add(labelTemp)
 	currGrid.Add(cpuTemp)
-	// grid.Add(createRow("Temp", cpuTemp))
 
 	count := 0
 	clockCount := 0
@@ -156,7 +132,6 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 			labelPackage, _ := gtk.LabelNew("Package")
 			nameGrid.Add(labelPackage)
 			currGrid.Add(packageTemp)
-			// grid.Add(createRow("Package", packageTemp))
 		} else if strings.Contains(k, "ccd") {
 			ccdTemp, _ := gtk.LabelNew(x)
 			labelName := fmt.Sprintf("CCD %d", count)
@@ -164,7 +139,6 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 			labelCCD, _ := gtk.LabelNew(labelName)
 			nameGrid.Add(labelCCD)
 			currGrid.Add(ccdTemp)
-			// grid.Add(createRow(labelName, ccdTemp))
 			count++
 		} else if strings.Contains(k, "Core") {
 			coreTemp, _ := gtk.LabelNew(x)
@@ -173,7 +147,10 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 			labelName, _ := gtk.LabelNew(els[1])
 			coreNames = append(coreNames, labelName)
 			coreValues = append(coreValues, coreTemp)
-			// coreGrid.Add(createRow(els[1], coreTemp))
+			str, _ := cpuTemp.GetText()
+			if str == "" {
+				cpuTemp.SetText(x)
+			}
 		} else if strings.Contains(k, "clock") {
 			clock, _ := gtk.LabelNew(x)
 			labelName := fmt.Sprintf("Clock %d", clockCount)
@@ -181,7 +158,6 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 			label, _ := gtk.LabelNew(labelName)
 			clockNames = append(clockNames, label)
 			clockValues = append(clockValues, clock)
-			// clockGrid.Add(createRow(labelName, clock))
 			clockCount++
 		}
 	}
@@ -204,7 +180,6 @@ func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
 		label, _ := gtk.LabelNew("PCH")
 		nameGrid.Add(label)
 		currGrid.Add(chipsetTemp)
-		// grid.Add(createRow("PCH", chipsetTemp))
 	}
 
 	return true
@@ -216,7 +191,7 @@ func Update() {
 	if len(name) == 0 {
 		return
 	}
-
+	var cpuTempLabel *gtk.Label
 	for k, v := range labelMap {
 		if strings.Contains(k, "PCH") {
 			v.SetText(elements["cpu.pch"])
@@ -231,7 +206,11 @@ func Update() {
 				v.SetText(elements[key])
 			}
 		} else if strings.Contains(k, "Temp") {
-			v.SetText(elements["cpu.temp"])
+			if x, ok := elements["cpu.temp"]; ok {
+				v.SetText(x)
+			} else {
+				cpuTempLabel = v
+			}
 		} else if strings.Contains(k, "Package") {
 			for x, y := range elements {
 				if strings.Contains(x, "Package") {
@@ -250,6 +229,9 @@ func Update() {
 			for x, y := range elements {
 				if strings.Contains(x, "Core") && strings.Contains(x, els[1]) {
 					v.SetText(y)
+				}
+				if cpuTempLabel != nil {
+					cpuTempLabel.SetText(y)
 				}
 			}
 		}
