@@ -47,22 +47,39 @@ func main() {
 
 	nameGrid, _ := gtk.GridNew()
 	nameGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	nameGrid.SetBorderWidth(10)
 	currGrid, _ := gtk.GridNew()
 	currGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	currGrid.SetBorderWidth(10)
+	minGrid, _ := gtk.GridNew()
+	minGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	minGrid.SetBorderWidth(10)
+	maxGrid, _ := gtk.GridNew()
+	maxGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
+	maxGrid.SetBorderWidth(10)
 
 	mainGrid.Add(nameGrid)
 	mainGrid.Add(currGrid)
+	mainGrid.Add(minGrid)
+	mainGrid.Add(maxGrid)
 
+	empty, _ := gtk.LabelNew("")
+	current, _ := gtk.LabelNew("Current")
+	currGrid.Add(current)
+	min, _ := gtk.LabelNew("Min")
+	minGrid.Add(min)
+	max, _ := gtk.LabelNew("Max")
+	maxGrid.Add(max)
+	nameGrid.Add(empty)
 	// cpuGrid, _ := gtk.GridNew()
 	// cpuGrid.SetOrientation(gtk.ORIENTATION_VERTICAL)
-	if cpuinfo.PopulateContainer(nameGrid, currGrid) {
+	if cpuinfo.PopulateContainer(nameGrid, currGrid, minGrid, maxGrid) {
 		log.Println("Populated CPU grid")
 		// mainGrid.Add(cpuGrid)
 		// empty, _ := gtk.LabelNew("")
 		// mainGrid.Add(empty)
 		log.Println("CPU grid added")
 	}
-	empty, _ := gtk.LabelNew("")
 	nameGrid.Add(empty)
 	currGrid.Add(empty)
 
