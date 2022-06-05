@@ -41,14 +41,17 @@ func GetInformations() (string, map[string]string) {
 		if strings.HasPrefix(line, "CPU") {
 			elements := strings.Split(line, ":")
 			result["cpu.temp"] = strings.TrimLeft(elements[1], " +")
-		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") || strings.Contains(line, "Tccd") {
+		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") || strings.Contains(line, "Tccd") || strings.Contains(line, "Tdie") {
 			elements := strings.Split(line, ":")
 			temp := ""
 			for _, c := range elements[1] {
+				temp += string(c)
 				if c == 'C' {
 					break
 				}
-				temp += string(c)
+			}
+			if !strings.HasSuffix(temp, "C") {
+				temp += "C"
 			}
 			result["cpu."+elements[0]] = strings.TrimLeft(temp, " +")
 		} else if strings.HasPrefix(line, "Tctl") {
