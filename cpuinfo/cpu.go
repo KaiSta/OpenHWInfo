@@ -103,6 +103,45 @@ func getMaxClock(elements map[string]string) string {
 	return strconv.FormatFloat(maxVal, 'f', 2, 64)
 }
 
+func parseTemp(temp string, def float64) float64 {
+	log.Println("parsetemp", temp, def)
+	temp = strings.TrimRight(temp, " ")
+	temp = strings.Replace(temp, "°C", "", -1)
+
+	if s, err := strconv.ParseFloat(temp, 64); err == nil {
+		log.Println("parsetemp val", s)
+		return s
+	} else {
+		log.Println("parsetemp error", err)
+	}
+	log.Println(def)
+	return def
+}
+
+var minMap map[string]float64
+var maxMap map[string]float64
+
+func init() {
+	minMap = make(map[string]float64)
+	maxMap = make(map[string]float64)
+}
+
+func getMin(key string, value float64, unit string) string {
+	if currMin, ok := minMap[key]; ok && currMin < value {
+		return fmt.Sprintf("%v%v", currMin, unit)
+	}
+	minMap[key] = value
+	return fmt.Sprintf("%v%v", value, unit)
+}
+
+func getMax(key string, value float64, unit string) string {
+	if currMax, ok := maxMap[key]; ok && currMax > value {
+		return fmt.Sprintf("%v%v", currMax, unit)
+	}
+	maxMap[key] = value
+	return fmt.Sprintf("%v%v", value, unit)
+}
+
 var labelMap map[string]*gtk.Label
 var labelMinMap map[string]*gtk.Label
 var labelMaxMap map[string]*gtk.Label
@@ -276,19 +315,42 @@ func Update() {
 	for k, v := range labelMap {
 		if strings.Contains(k, "PCH") {
 			v.SetText(elements["cpu.pch"])
+			minEntry := labelMinMap[k]
+			minTmp := getMin(k, parseTemp(elements["cpu.pch"], 999.99), "°C")
+			minEntry.SetText(minTmp)
+			maxEntry := labelMaxMap[k]
+			maxTmp := getMax(k, parseTemp(elements["cpu.pch"], 0), "°C")
+			maxEntry.SetText(maxTmp)
 		} else if strings.Contains(k, "Clock") {
 			els := strings.Split(k, " ")
 			if len(els) == 1 {
-				v.SetText(getMaxClock(elements))
+				tmp := getMaxClock(elements)
+				v.SetText(tmp)
+				minEntry := labelMinMap[k]
+				minTmp := getMin(k, parseTemp(tmp, 999.99), "")
+				minEntry.SetText(minTmp)
+				maxEntry := labelMaxMap[k]
+				maxTmp := getMax(k, parseTemp(tmp, 0), "")
+				maxEntry.SetText(maxTmp)
 			} else {
-				log.Println("els[1]=", els[1])
 				key := fmt.Sprintf("cpu.clock%s", els[1])
-				log.Println("Searching for key ", key)
 				v.SetText(elements[key])
+				minEntry := labelMinMap[k]
+				minTmp := getMin(k, parseTemp(elements[key], 999.99), "")
+				minEntry.SetText(minTmp)
+				maxEntry := labelMaxMap[k]
+				maxTmp := getMax(k, parseTemp(elements[key], 0), "")
+				maxEntry.SetText(maxTmp)
 			}
 		} else if strings.Contains(k, "Temp") {
 			if x, ok := elements["cpu.temp"]; ok {
 				v.SetText(x)
+				minEntry := labelMinMap[k]
+				minTmp := getMin(k, parseTemp(elements["cpu.temp"], 999.99), "°C")
+				minEntry.SetText(minTmp)
+				maxEntry := labelMaxMap[k]
+				maxTmp := getMax(k, parseTemp(elements["cpu.temp"], 0), "°C")
+				maxEntry.SetText(maxTmp)
 			} else {
 				cpuTempLabel = v
 			}
@@ -296,6 +358,12 @@ func Update() {
 			for x, y := range elements {
 				if strings.Contains(x, "Package") {
 					v.SetText(y)
+					minEntry := labelMinMap[k]
+					minTmp := getMin(k, parseTemp(elements[x], 999.99), "°C")
+					minEntry.SetText(minTmp)
+					maxEntry := labelMaxMap[k]
+					maxTmp := getMax(k, parseTemp(elements[x], 0), "°C")
+					maxEntry.SetText(maxTmp)
 				}
 			}
 		} else if strings.Contains(k, "CCD") {
@@ -303,6 +371,12 @@ func Update() {
 			for x, y := range elements {
 				if strings.Contains(x, "ccd") && strings.Contains(x, els[1]) {
 					v.SetText(y)
+					minEntry := labelMinMap[k]
+					minTmp := getMin(k, parseTemp(elements[x], 999.99), "°C")
+					minEntry.SetText(minTmp)
+					maxEntry := labelMaxMap[k]
+					maxTmp := getMax(k, parseTemp(elements[x], 0), "°C")
+					maxEntry.SetText(maxTmp)
 				}
 			}
 		} else if strings.Contains(k, "Core") {
@@ -310,9 +384,21 @@ func Update() {
 			for x, y := range elements {
 				if strings.Contains(x, "Core") && strings.Contains(x, els[1]) {
 					v.SetText(y)
+					minEntry := labelMinMap[k]
+					minTmp := getMin(k, parseTemp(elements[x], 999.99), "°C")
+					minEntry.SetText(minTmp)
+					maxEntry := labelMaxMap[k]
+					maxTmp := getMax(k, parseTemp(elements[x], 0), "°C")
+					maxEntry.SetText(maxTmp)
 				}
 				if cpuTempLabel != nil {
 					cpuTempLabel.SetText(y)
+					minEntry := labelMinMap[k]
+					minTmp := getMin(k, parseTemp(elements[x], 999.99), "°C")
+					minEntry.SetText(minTmp)
+					maxEntry := labelMaxMap[k]
+					maxTmp := getMax(k, parseTemp(elements[x], 0), "°C")
+					maxEntry.SetText(maxTmp)
 				}
 			}
 		}
