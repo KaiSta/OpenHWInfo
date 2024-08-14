@@ -3,8 +3,8 @@ package cpuinfo
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -62,7 +62,7 @@ func GetInformations() (string, map[string]string) {
 		}
 	}
 
-	cpuinfos, err := ioutil.ReadFile("/proc/cpuinfo") // the file is inside the local directory
+	cpuinfos, err := os.ReadFile("/proc/cpuinfo") // the file is inside the local directory
 	if err != nil {
 		log.Fatal("Reading /proc/cpuinfo failed:", err)
 	}
@@ -139,10 +139,6 @@ func getMax(key string, value float64, unit string) string {
 	maxMap[key] = value
 	return fmt.Sprintf("%v%v", value, unit)
 }
-
-var labelMap map[string]*gtk.Label
-var labelMinMap map[string]*gtk.Label
-var labelMaxMap map[string]*gtk.Label
 
 // func PopulateContainer(nameGrid, currGrid, minGrid, maxGrid *gtk.Grid) bool {
 // 	log.Println("Starting to populate cpu grid")
