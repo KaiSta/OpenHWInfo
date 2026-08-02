@@ -37,12 +37,16 @@
     <table>
         <tr>
             <th>Element</th>
-            <th>Value</th>
+            <th>Current Value</th>
+            <th>Min Value</th>
+            <th>Max Value</th>
         </tr>
         {{range .CpuKeys}}
             <tr>
                 <td>{{.Label}}</td>
                 <td>{{index $.CpuValues .Key}}</td>
+                <td>{{index $.CpuMinValues .Key}}</td>
+                <td>{{index $.CpuMaxValues .Key}}</td>
             </tr>
         {{end}}
     </table>
@@ -51,12 +55,16 @@
     <table>
         <tr>
             <th>Element</th>
-            <th>Value</th>
+            <th>Current Value</th>
+            <th>Min Value</th>
+            <th>Max Value</th>
         </tr>
         {{range .GpuKeys}}
             <tr>
                 <td>{{.Label}}</td>
                 <td>{{index $.GpuValues .Key}}</td>
+                <td>{{index $.GpuMinValues .Key}}</td>
+                <td>{{index $.GpuMaxValues .Key}}</td>
             </tr>
         {{end}}
     </table>
