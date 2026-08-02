@@ -2,61 +2,56 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"time"
+	"html/template"
+	"net/http"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
-	"github.com/olekukonko/tablewriter"
 )
 
+type Data struct {
+	CpuKeys   []string
+	GpuKeys   []string
+	CpuValues map[string]string
+	GpuValues map[string]string
+}
+
 func main() {
-	var cpuKeys []string
-	var gpuKeys []string
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		var cpuKeys []string
+		var gpuKeys []string
 
 		_, cpuElements := cpuinfo.GetInformations()
-
 		if len(cpuKeys) == 0 {
 			for key := range cpuElements {
 				cpuKeys = append(cpuKeys, key)
 			}
 		}
 
-		table := tablewriter.NewWriter(os.Stdout)
-		table.Header("Element", "CPU Value")
-		for _, key := range cpuKeys {
-			value, ok := cpuElements[key]
-			if !ok {
-				value = ""
-			}
-			table.Append([]string{key, value})
-		}
-
 		_, gpuElements := amd.GetInformations()
-		fmt.Println("GPU Elements:", gpuElements) // Debugging line to print GPU elements
-
 		if len(gpuKeys) == 0 {
 			for key := range gpuElements {
 				gpuKeys = append(gpuKeys, key)
 			}
 		}
 
-		table.Append([]string{"", ""}) // Empty row for separation
-
-		table.Append([]string{"GPU Metrics", ""}) // Header for GPU metrics
-		for _, key := range gpuKeys {
-			value, ok := gpuElements[key]
-			if !ok {
-				value = ""
-			}
-			table.Append([]string{key, value})
+		data := Data{
+			CpuKeys:   cpuKeys,
+			GpuKeys:   gpuKeys,
+			CpuValues: cpuElements,
+			GpuValues: gpuElements,
 		}
 
-		table.Render()
+		tmpl := template.Must(template.ParseFiles("website/index.html"))
+		err := tmpl.Execute(w, data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+
+	fmt.Println("Starting server at port 8080")
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		panic(err)
 	}
 }
