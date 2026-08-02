@@ -41,8 +41,8 @@
         </tr>
         {{range .CpuKeys}}
             <tr>
-                <td>{{.}}</td>
-                <td>{{index $.CpuValues .}}</td>
+                <td>{{.Label}}</td>
+                <td>{{index $.CpuValues .Key}}</td>
             </tr>
         {{end}}
     </table>
@@ -55,8 +55,8 @@
         </tr>
         {{range .GpuKeys}}
             <tr>
-                <td>{{.}}</td>
-                <td>{{index $.GpuValues .}}</td>
+                <td>{{.Label}}</td>
+                <td>{{index $.GpuValues .Key}}</td>
             </tr>
         {{end}}
     </table>
