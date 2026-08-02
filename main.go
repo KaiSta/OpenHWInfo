@@ -42,12 +42,15 @@ func main() {
 			GpuValues: gpuElements,
 		}
 
-		tmpl := template.Must(template.ParseFiles("website/index.html"))
-		err := tmpl.Execute(w, data)
+		tmpl := template.Must(template.ParseGlob("website/*.html"))
+		err := tmpl.ExecuteTemplate(w, "index.html", data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
+
+	fs := http.FileServer(http.Dir("website/resources"))
+	http.Handle("/resources/", http.StripPrefix("/resources/", fs))
 
 	fmt.Println("Starting server at port 8080")
 	err := http.ListenAndServe(":8080", nil)
