@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
 func probeAMD() (bool, int) {
@@ -60,7 +62,7 @@ func getGPUName2() string {
 func GetInformations() (string, map[string]string) {
 	data := make(map[string]string)
 	gpuName := getGPUName2()
-	data["name"] = gpuName
+	data[shared.GPUName.Key] = gpuName
 
 	found, cardIndex := probeAMD()
 	if !found {
@@ -75,33 +77,33 @@ func GetInformations() (string, map[string]string) {
 		return gpuName, data
 	}
 
-	parseTemperature(&data, hwmonPath, "temp1_input", "gpu.temp")
-	parseTemperature(&data, hwmonPath, "temp2_input", "gpu.hotspot_temp")
-	parseTemperature(&data, hwmonPath, "temp3_input", "vram.temp")
+	parseTemperature(&data, hwmonPath, "temp1_input", shared.GPUTemp.Key)
+	parseTemperature(&data, hwmonPath, "temp2_input", shared.GPUHotspotTemp.Key)
+	parseTemperature(&data, hwmonPath, "temp3_input", shared.VRAMTemp.Key)
 
 	// Read GPU frequency (freq1_input) and convert to MHz
 	gpuFreq := readSysValue(filepath.Join(hwmonPath, "freq1_input"))
 	if gpuFreq != "" {
-		data["gpu.frequency"] = parseFrequencyValue(gpuFreq)
+		data[shared.GPUFrequency.Key] = parseFrequencyValue(gpuFreq)
 	}
 
 	// Read memory frequency (freq2_input) and convert to MHz
 	memFreq := readSysValue(filepath.Join(hwmonPath, "freq2_input"))
 	if memFreq != "" {
-		data["vram.frequency"] = parseFrequencyValue(memFreq)
+		data[shared.VRAMLrequency.Key] = parseFrequencyValue(memFreq)
 	}
 
 	// Append hwmon to the card path
 	devicePath := filepath.Join(hwmonPath, "device")
 
-	data["vram.total"] = parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total"))
-	data["vram.used"] = parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used"))
-	data["vram.vendor"] = readSysValue(filepath.Join(devicePath, "mem_info_vram_vendor"))
+	data[shared.VRAMTotal.Key] = parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total"))
+	data[shared.VRAMUsed.Key] = parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used"))
+	data[shared.VRAMVendor.Key] = readSysValue(filepath.Join(devicePath, "mem_info_vram_vendor"))
 
-	data["gpu.usage"] = readSysValue(filepath.Join(devicePath, "gpu_busy_percent"))
-	data["gpu.power.max"] = parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_cap_max")), 1000000)
-	data["gpu.power.avg"] = parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_average")), 1000000)
-	data["fan.speed"] = readSysValue(filepath.Join(hwmonPath, "fan1_input"))
+	data[shared.GPUUsage.Key] = readSysValue(filepath.Join(devicePath, "gpu_busy_percent"))
+	data[shared.GPUPowerMax.Key] = parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_cap_max")), 1000000)
+	data[shared.GPUPowerAvg.Key] = parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_average")), 1000000)
+	data[shared.FanSpeed.Key] = readSysValue(filepath.Join(hwmonPath, "fan1_input"))
 
 	return gpuName, data
 }
@@ -125,7 +127,7 @@ func readSysValue(path string) string {
 
 func parseTemperature(data *map[string]string, hwmonPath string, fileName string, dataKey ...string) {
 	if val, err := strconv.Atoi(readSysValue(filepath.Join(hwmonPath, fileName))); err == nil {
-		key := "gpu.temp"
+		key := shared.GPUTemp.Key
 		if len(dataKey) > 0 {
 			key = dataKey[0]
 		}

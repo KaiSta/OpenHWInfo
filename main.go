@@ -7,59 +7,49 @@ import (
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
+	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
 type Data struct {
-	CpuKeys   []KeyTemplate
-	GpuKeys   []KeyTemplate
+	CpuKeys   []shared.KeyTemplate
+	GpuKeys   []shared.KeyTemplate
 	CpuValues map[string]string
 	GpuValues map[string]string
 }
 
-type KeyTemplate struct {
-	Label string
-	Key   string
+var cpuTemplates = []shared.KeyTemplate{
+	shared.CPUVendorID,
+	shared.CPUBrand,
+	shared.CPUModel,
+	shared.CPUClock0,
+	shared.CPUClock1,
+	shared.CPUClock2,
+	shared.CPUClock3,
+	shared.CPUTemp,
+	shared.CPUPCHTemp,
+	shared.TCcd0,
+	shared.TCcd1,
+	shared.TCcd2,
+	shared.TCcd3,
+	shared.TCcd4,
+	shared.TCcd5,
 }
 
-var (
-	CPUVendorID = KeyTemplate{"CPU Vendor ID", "cpu.vendorID"}
-	CPUBrand    = KeyTemplate{"CPU Brand", "cpu.brand"}
-	CPUModel    = KeyTemplate{"CPU Model", "cpu.model"}
-)
-
-var cpuTemplates = []KeyTemplate{
-	CPUVendorID,
-	CPUBrand,
-	CPUModel,
-	{"CPU Clock", "cpu.clock0"},
-	{"CPU Clock 1", "cpu.clock1"},
-	{"CPU Clock 2", "cpu.clock2"},
-	{"CPU Clock 3", "cpu.clock3"},
-	{"CPU Temperature", "cpu.temp"},
-	{"CPU PCH Temperature", "cpu.pch"},
-}
-
-var (
-	GPUName          = KeyTemplate{"GPU Name", "name"}
-	GPUDriverVersion = KeyTemplate{"Driver Version", "driverVersion"}
-)
-
-var gpuTemplates = []KeyTemplate{
-	GPUName,
-	GPUDriverVersion,
-	{"GPU Temperature", "gpu.temp"},
-	{"GPU Hotspot Temperature", "gpu.hotspot_temp"},
-	{"VRAM Temperature", "vram.temp"},
-	{"GPU Clock", "gpu.frequency"},
-	{"VRAM Frequency", "vram.frequency"},
-	{"VRAM Total", "vram.total"},
-	{"VRAM Used", "vram.used"},
-	{"VRAM Vendor", "vram.vendor"},
-	{"GPU Usage", "gpu.usage"},
-	{"GPU Power Max", "gpu.power.max"},
-	{"GPU Power Avg", "gpu.power.avg"},
-	{"Fan Speed", "fan.speed"},
-	// Add more entries as needed...
+var gpuTemplates = []shared.KeyTemplate{
+	shared.GPUName,
+	shared.GPUDriverVersion,
+	shared.GPUTemp,
+	shared.GPUHotspotTemp,
+	shared.VRAMTemp,
+	shared.GPUFrequency,
+	shared.VRAMLrequency,
+	shared.VRAMTotal,
+	shared.VRAMUsed,
+	shared.VRAMVendor,
+	shared.GPUUsage,
+	shared.GPUPowerMax,
+	shared.GPUPowerAvg,
+	shared.FanSpeed,
 }
 
 var templateCache *template.Template
@@ -70,14 +60,28 @@ func init() {
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		var cpuKeys []KeyTemplate = cpuTemplates
-		var gpuKeys []KeyTemplate = gpuTemplates
-
 		_, cpuElements := cpuinfo.GetInformations()
 		_, gpuElements := amd.GetInformations()
+
+		// Filter CPU keys to only show those with available values
+		var filteredCpuKeys []shared.KeyTemplate
+		for _, key := range cpuTemplates {
+			if value, exists := cpuElements[key.Key]; exists && value != "" {
+				filteredCpuKeys = append(filteredCpuKeys, key)
+			}
+		}
+
+		// Filter GPU keys to only show those with available values
+		var filteredGpuKeys []shared.KeyTemplate
+		for _, key := range gpuTemplates {
+			if value, exists := gpuElements[key.Key]; exists && value != "" {
+				filteredGpuKeys = append(filteredGpuKeys, key)
+			}
+		}
+
 		data := Data{
-			CpuKeys:   cpuKeys,
-			GpuKeys:   gpuKeys,
+			CpuKeys:   filteredCpuKeys,
+			GpuKeys:   filteredGpuKeys,
 			CpuValues: cpuElements,
 			GpuValues: gpuElements,
 		}

@@ -11,5 +11,71 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# Go build artifacts
+*.o
+_.o
+*.a
+
+# Go build cache
+*.cache
+
+# Go workspace file
+go.work
+
+# Go modules
+go.mod
+go.sum
+
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files and debug output
+*.log
+debug.log
+error.log
+
+# Go tool output
+vet_output.txt
+go-build*
+profile.tok
+cover.out
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Build directories
+bin/
+dist/
+build/
+out/
+
+# Documentation artifacts
+docs/_build/
+sphinx/_build/
+
+# Web development
+website/node_modules/
+website/.next/
+website/.cache/
+website/dist/
