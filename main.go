@@ -50,6 +50,8 @@ var gpuTemplates = []KeyTemplate{
 	{"GPU Temperature", "gpu.temp"},
 	{"GPU Hotspot Temperature", "gpu.hotspot_temp"},
 	{"VRAM Temperature", "vram.temp"},
+	{"GPU Clock", "gpu.frequency"},
+	{"VRAM Frequency", "vram.frequency"},
 	{"VRAM Total", "vram.total"},
 	{"VRAM Used", "vram.used"},
 	{"VRAM Vendor", "vram.vendor"},

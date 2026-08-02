@@ -73,9 +73,22 @@ func GetInformations() (string, map[string]string) {
 		parseTemperature(&data, hwmonPath, "temp1_input", "gpu.temp")
 		parseTemperature(&data, hwmonPath, "temp2_input", "gpu.hotspot_temp")
 		parseTemperature(&data, hwmonPath, "temp3_input", "vram.temp")
+
+		// Read GPU frequency (freq1_input) and convert to MHz
+		gpuFreq := readSysValue(filepath.Join(hwmonPath, "freq1_input"))
+		if gpuFreq != "" {
+			data["gpu.frequency"] = parseFrequencyValue(gpuFreq)
+		}
+
+		// Read memory frequency (freq2_input) and convert to MHz
+		memFreq := readSysValue(filepath.Join(hwmonPath, "freq2_input"))
+		if memFreq != "" {
+			data["vram.frequency"] = parseFrequencyValue(memFreq)
+		}
 	} else {
 		log.Println("No hwmon path found")
 	}
+
 	// Append hwmon to the card path
 	fmt.Println("Card Path:", cardPath) // Debugging line to print the card path
 	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
@@ -136,4 +149,20 @@ func parsePowerValue(raw string, divisor int) string {
 		return "N/A"
 	}
 	return fmt.Sprintf("%d W", val/divisor)
+}
+
+func parseFrequencyValue(value string) string {
+	if value == "" {
+		return ""
+	}
+
+	freq, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		log.Printf("Error parsing frequency value: %v", err)
+		return ""
+	}
+
+	// Convert Hz to MHz
+	mhz := freq / 1000000
+	return fmt.Sprintf("%.2f Mhz", mhz)
 }
