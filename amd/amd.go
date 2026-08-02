@@ -41,9 +41,25 @@ func getGPUName() string {
 	return gpuName
 }
 
+func getGPUName2() string {
+	cmd := exec.Command("sh", "-c", "glxinfo | grep 'OpenGL renderer'")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("Error executing glxinfo command: %v\n", err)
+		return "AMD GPU"
+	}
+	gpuName := strings.TrimSpace(string(output))
+	// Extract just the renderer name
+	parts := strings.Split(gpuName, ":")
+	if len(parts) > 1 {
+		return strings.TrimSpace(parts[1])
+	}
+	return gpuName
+}
+
 func GetInformations() (string, map[string]string) {
 	data := make(map[string]string)
-	gpuName := getGPUName()
+	gpuName := getGPUName2()
 	data["name"] = gpuName
 
 	found, cardIndex := probeAMD()
