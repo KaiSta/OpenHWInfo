@@ -30,14 +30,14 @@ func getGPUName() string {
 	}
 	gpuName := strings.TrimSpace(string(output))
 
-	// // Use regex to extract the Radeon model from the full name
-	// re := regexp.MustCompile(`Radeon.*?\S`)
-	// match := re.FindString(gpuName)
-
-	// if match != "" {
-	// 	return match
-	// }
-
+	// Split into parts and find the manufacturer name
+	parts := strings.Fields(gpuName)
+	for i, part := range parts {
+		if part == "Advanced" && len(parts) > i+1 && parts[i+1] == "Micro" {
+			// Return everything from "Advanced Micro Devices..." onwards
+			return strings.Join(parts[i:], " ")
+		}
+	}
 	return gpuName
 }
 

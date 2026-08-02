@@ -7,205 +7,71 @@ import (
 	"strings"
 )
 
+// GetInformations retrieves GPU information using nvidia-smi command
 func GetInformations() (string, map[string]string) {
-	log.Println("nvidia get infos")
+	log.Println("Retrieving NVIDIA GPU information")
+
+	// Check if nvidia-smi is available
 	probeCmd := exec.Command("which", "nvidia-smi")
 	var probeOut bytes.Buffer
 	probeCmd.Stdout = &probeOut
 	err := probeCmd.Run()
-	log.Println("Nvidia probe result", probeOut.String())
-	if probeOut.String() == "" {
-		log.Println("Probe failed")
+	if err != nil {
+		log.Printf("Error probing for nvidia-smi: %v", err)
 		return "", nil
 	}
 
-	cmd := exec.Command("nvidia-smi", "--query-gpu=name,temperature.gpu,memory.used,utilization.gpu,power.draw,clocks.current.graphics,clocks.current.memory,power.limit,power.max_limit,temperature.memory,memory.total,fan.speed", "--format=csv")
+	if probeOut.String() == "" {
+		log.Println("nvidia-smi not found")
+		return "", nil
+	}
+
+	// Execute nvidia-smi with query parameters
+	cmd := exec.Command(
+		"nvidia-smi",
+		"--query-gpu=name,temperature.gpu,memory.used,utilization.gpu,power.draw,clocks.current.graphics,clocks.current.memory,power.limit,power.max_limit,temperature.memory,memory.total,fan.speed",
+		"--format=csv",
+	)
 	var out bytes.Buffer
 	cmd.Stdout = &out
+
 	err = cmd.Run()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error executing nvidia-smi: %v", err)
 		return "", nil
 	}
-	str := out.String()
-	print(str)
 
-	var data = make(map[string]string)
+	// Parse the output
+	output := out.String()
+	log.Printf("Raw GPU data:\n%s", output)
 
-	splitStr := strings.Split(str, "\n")
-	fields := strings.Split(splitStr[1], ",")
+	data := make(map[string]string)
+	lines := strings.Split(output, "\n")
 
-	data["gpu.temp"] = fields[1]
+	// Skip header line and process first GPU entry
+	if len(lines) < 2 {
+		return "", nil
+	}
+
+	fields := strings.Split(lines[1], ",")
+	if len(fields) != 12 {
+		log.Println("Unexpected number of fields in nvidia-smi output")
+		return "", nil
+	}
+
+	// Map the fields to more descriptive keys
+	data["gpu.name"] = fields[0]
+	data["gpu.temperature"] = fields[1]
 	data["memory.used"] = fields[2]
-	data["gpu.usage"] = fields[3]
-	data["gpu.power.draw"] = fields[4]
-	data["gpu.clock"] = fields[5]
-	data["memory.clock"] = fields[6]
-	data["gpu.power.max"] = fields[7]
-	data["gpu.power.limit"] = fields[8]
-	data["memory.temp"] = fields[9]
+	data["gpu.utilization"] = fields[3]
+	data["power.draw"] = fields[4]
+	data["clocks.graphics"] = fields[5]
+	data["clocks.memory"] = fields[6]
+	data["power.limit"] = fields[7]
+	data["power.max_limit"] = fields[8]
+	data["memory.temperature"] = fields[9]
 	data["memory.total"] = fields[10]
 	data["fan.speed"] = fields[11]
 
-	return fields[0], data
-
+	return data["gpu.name"], data
 }
-
-// func PopulateContainer(nameGrid, currGrid *gtk.Grid) bool {
-// 	name, elements := GetInformations()
-
-// 	if len(name) == 0 {
-// 		return false
-// 	}
-
-// 	labelMap = make(map[string]*gtk.Label)
-
-// 	nameLabel, _ := gtk.LabelNew(name)
-// 	nameGrid.Add(nameLabel)
-// 	empty, _ := gtk.LabelNew("")
-// 	empty2, _ := gtk.LabelNew("")
-// 	currGrid.Add(empty)
-// 	currGrid.Add(empty2)
-
-// 	if x, ok := elements["gpu.clock"]; ok {
-// 		clockLabel, _ := gtk.LabelNew(x)
-// 		labelMap["Clock"] = clockLabel
-// 		label, _ := gtk.LabelNew("Clock")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(clockLabel)
-// 		// grid.Add(createRow("Clock", clockLabel))
-// 	}
-
-// 	if x, ok := elements["memory.clock"]; ok {
-// 		memLabel, _ := gtk.LabelNew(x)
-// 		labelMap["RAM Clock"] = memLabel
-// 		label, _ := gtk.LabelNew("RAM Clock")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(memLabel)
-// 		// grid.Add(createRow("RAM Clock", memLabel))
-// 	}
-
-// 	if x, ok := elements["gpu.temp"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["Temp"] = l
-// 		label, _ := gtk.LabelNew("Temp")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("Temp", l))
-// 	}
-
-// 	if x, ok := elements["memory.temp"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["RAM Temp"] = l
-// 		label, _ := gtk.LabelNew("RAM Temp")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("RAM Temp", l))
-// 	}
-
-// 	if x, ok := elements["gpu.power.draw"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["PowerDraw"] = l
-// 		label, _ := gtk.LabelNew("PowerDraw")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("PowerDraw", l))
-// 	}
-
-// 	if x, ok := elements["gpu.power.max"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["PowerMax"] = l
-// 		label, _ := gtk.LabelNew("PowerMax")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("PowerMax", l))
-// 	}
-
-// 	if x, ok := elements["gpu.power.limit"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["PowerLimit"] = l
-// 		label, _ := gtk.LabelNew("PowerLimit")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("PowerLimit", l))
-// 	}
-
-// 	if x, ok := elements["gpu.usage"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["Util"] = l
-// 		label, _ := gtk.LabelNew("Util")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("Util", l))
-// 	}
-
-// 	if x, ok := elements["fan.speed"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["FanSpeed"] = l
-// 		label, _ := gtk.LabelNew("FanSpeed")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("FanSpeed", l))
-// 	}
-
-// 	if x, ok := elements["memory.used"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["MemoryUsed"] = l
-// 		label, _ := gtk.LabelNew("MemoryUsed")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("MemoryUsed", l))
-// 	}
-
-// 	if x, ok := elements["memory.total"]; ok {
-// 		l, _ := gtk.LabelNew(x)
-// 		labelMap["MemoryTotal"] = l
-// 		label, _ := gtk.LabelNew("MemoryTotal")
-// 		nameGrid.Add(label)
-// 		currGrid.Add(l)
-// 		// grid.Add(createRow("MemoryTotal", l))
-// 	}
-
-// 	return true
-// }
-
-// func Update() {
-// 	name, elements := GetInformations()
-
-// 	if len(name) == 0 {
-// 		return
-// 	}
-
-// 	clock := labelMap["Clock"]
-// 	clock.SetText(elements["gpu.clock"])
-
-// 	ramClock := labelMap["RAM Clock"]
-// 	ramClock.SetText(elements["memory.clock"])
-
-// 	temp := labelMap["Temp"]
-// 	temp.SetText(elements["gpu.temp"])
-
-// 	ramTemp := labelMap["RAM Temp"]
-// 	ramTemp.SetText(elements["memory.temp"])
-
-// 	powerdraw := labelMap["PowerDraw"]
-// 	powerdraw.SetText(elements["gpu.power.draw"])
-
-// 	powerMax := labelMap["PowerMax"]
-// 	powerMax.SetText(elements["gpu.power.max"])
-
-// 	powerLimit := labelMap["PowerLimit"]
-// 	powerLimit.SetText(elements["gpu.power.limit"])
-
-// 	util := labelMap["Util"]
-// 	util.SetText(elements["gpu.usage"])
-
-// 	fanspeed := labelMap["FanSpeed"]
-// 	fanspeed.SetText(elements["fan.speed"])
-
-// 	memused := labelMap["MemoryUsed"]
-// 	memused.SetText(elements["memory.used"])
-
-// 	memtotal := labelMap["MemoryTotal"]
-// 	memtotal.SetText(elements["memory.total"])
-// }
