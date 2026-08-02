@@ -62,6 +62,12 @@ var gpuTemplates = []KeyTemplate{
 	// Add more entries as needed...
 }
 
+var templateCache *template.Template
+
+func init() {
+	templateCache = template.Must(template.ParseGlob("website/*.html"))
+}
+
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var cpuKeys []KeyTemplate = cpuTemplates
@@ -76,8 +82,7 @@ func main() {
 			GpuValues: gpuElements,
 		}
 
-		tmpl := template.Must(template.ParseGlob("website/*.html"))
-		err := tmpl.ExecuteTemplate(w, "index.html", data)
+		err := templateCache.ExecuteTemplate(w, "index.html", data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}

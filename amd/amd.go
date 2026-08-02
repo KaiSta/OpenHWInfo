@@ -69,32 +69,30 @@ func GetInformations() (string, map[string]string) {
 	}
 
 	cardPath := fmt.Sprintf("/sys/class/drm/card%d/device/hwmon", cardIndex)
-	if hwmonPath := findFirstSubpath(cardPath, "hwmon*"); hwmonPath != "" {
-		parseTemperature(&data, hwmonPath, "temp1_input", "gpu.temp")
-		parseTemperature(&data, hwmonPath, "temp2_input", "gpu.hotspot_temp")
-		parseTemperature(&data, hwmonPath, "temp3_input", "vram.temp")
-
-		// Read GPU frequency (freq1_input) and convert to MHz
-		gpuFreq := readSysValue(filepath.Join(hwmonPath, "freq1_input"))
-		if gpuFreq != "" {
-			data["gpu.frequency"] = parseFrequencyValue(gpuFreq)
-		}
-
-		// Read memory frequency (freq2_input) and convert to MHz
-		memFreq := readSysValue(filepath.Join(hwmonPath, "freq2_input"))
-		if memFreq != "" {
-			data["vram.frequency"] = parseFrequencyValue(memFreq)
-		}
-	} else {
+	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
+	if hwmonPath == "" {
 		log.Println("No hwmon path found")
+		return gpuName, data
+	}
+
+	parseTemperature(&data, hwmonPath, "temp1_input", "gpu.temp")
+	parseTemperature(&data, hwmonPath, "temp2_input", "gpu.hotspot_temp")
+	parseTemperature(&data, hwmonPath, "temp3_input", "vram.temp")
+
+	// Read GPU frequency (freq1_input) and convert to MHz
+	gpuFreq := readSysValue(filepath.Join(hwmonPath, "freq1_input"))
+	if gpuFreq != "" {
+		data["gpu.frequency"] = parseFrequencyValue(gpuFreq)
+	}
+
+	// Read memory frequency (freq2_input) and convert to MHz
+	memFreq := readSysValue(filepath.Join(hwmonPath, "freq2_input"))
+	if memFreq != "" {
+		data["vram.frequency"] = parseFrequencyValue(memFreq)
 	}
 
 	// Append hwmon to the card path
-	fmt.Println("Card Path:", cardPath) // Debugging line to print the card path
-	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
-	fmt.Println("HWMon Path:", hwmonPath) // Debugging line to print the hwmon path
-	devicePath := hwmonPath + "/device"
-	fmt.Println("Device Path:", devicePath) // Debugging line to print the device path
+	devicePath := filepath.Join(hwmonPath, "device")
 
 	data["vram.total"] = parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total"))
 	data["vram.used"] = parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used"))

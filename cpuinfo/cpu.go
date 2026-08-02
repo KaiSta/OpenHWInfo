@@ -19,18 +19,20 @@ func GetInformations() (string, map[string]string) {
 		return "", nil
 	}
 
+	cpuinfos, _ := os.ReadFile("/proc/cpuinfo")
+	lines := strings.Split(string(cpuinfos), "\n")
+	name, cpus := parseCpuInfo(lines)
+	cpus["cpu.model"] = name
+
 	cmd := exec.Command("sensors")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err = cmd.Run()
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Error reading sensor data: %v\n", err)
+		return name, cpus
 	}
 
-	cpuinfos, _ := os.ReadFile("/proc/cpuinfo")
-	lines := strings.Split(string(cpuinfos), "\n")
-	name, cpus := parseCpuInfo(lines)
-	cpus["cpu.model"] = name
 	temps := parseSensorOutput(strings.Split(out.String(), "\n"))
 	return name, mergeMaps(cpus, temps)
 }
@@ -57,7 +59,7 @@ func parseSensorOutput(lines []string) map[string]string {
 			temps["cpu."+strings.Split(line, ":")[0]] = extractTemp(line)
 		} else if strings.HasPrefix(line, "Tctl") {
 			temps["cpu.temp"] = strings.TrimLeft(strings.Split(line, ":")[1], " +")
-		} else if strings.HasPrefix(line, "pch") {
+		} else if strings.HasPrefix(line, "pch") && i+2 < len(lines) {
 			temps["cpu.pch"] = strings.TrimLeft(strings.Split(lines[i+2], ":")[1], " +")
 		}
 	}
