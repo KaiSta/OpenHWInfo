@@ -2,33 +2,61 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
-	"github.com/KaiSta/OpenHWInfo/nvidia"
+	"github.com/olekukonko/tablewriter"
 )
 
 func main() {
-	for {
+	var cpuKeys []string
+	var gpuKeys []string
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+
 		_, cpuElements := cpuinfo.GetInformations()
-		_, gpuElements := nvidia.GetInformations()
-		_, gpu2Elements := amd.GetInformations()
 
-		time.Sleep(5 * time.Second)
+		if len(cpuKeys) == 0 {
+			for key := range cpuElements {
+				cpuKeys = append(cpuKeys, key)
+			}
+		}
 
-		fmt.Println("CPU Infos:")
-		for key, value := range cpuElements {
-			fmt.Println(key, value)
+		table := tablewriter.NewWriter(os.Stdout)
+		table.Header("Element", "CPU Value")
+		for _, key := range cpuKeys {
+			value, ok := cpuElements[key]
+			if !ok {
+				value = ""
+			}
+			table.Append([]string{key, value})
 		}
-		fmt.Println("GPU Infos:")
-		for key, value := range gpuElements {
-			fmt.Println(key, value)
+
+		_, gpuElements := amd.GetInformations()
+		fmt.Println("GPU Elements:", gpuElements) // Debugging line to print GPU elements
+
+		if len(gpuKeys) == 0 {
+			for key := range gpuElements {
+				gpuKeys = append(gpuKeys, key)
+			}
 		}
-		fmt.Println("GPU2 Infos:")
-		for key, value := range gpu2Elements {
-			fmt.Println(key, value)
+
+		table.Append([]string{"", ""}) // Empty row for separation
+
+		table.Append([]string{"GPU Metrics", ""}) // Header for GPU metrics
+		for _, key := range gpuKeys {
+			value, ok := gpuElements[key]
+			if !ok {
+				value = ""
+			}
+			table.Append([]string{key, value})
 		}
-		fmt.Println("-------------------------------------------------")
+
+		table.Render()
 	}
 }
