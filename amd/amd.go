@@ -12,6 +12,11 @@ import (
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
+func Available() bool {
+	found, _ := probeAMD()
+	return found
+}
+
 func probeAMD() (bool, int) {
 	for i := 0; i < 4; i++ {
 		if _, err := os.Stat(fmt.Sprintf("/sys/class/drm/card%d/device", i)); err == nil {
