@@ -8,6 +8,10 @@ import (
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
+func Available() bool {
+	return probeNvidia()
+}
+
 func probeNvidia() bool {
 	cmd := exec.Command("sh", "-c", "lspci | grep -i nvidia")
 	output, err := cmd.Output()

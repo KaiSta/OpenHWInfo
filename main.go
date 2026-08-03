@@ -9,6 +9,7 @@ import (
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
+	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
@@ -158,7 +159,12 @@ func calculateMinMax(values []float64) (float64, float64) {
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, cpuElements := cpuinfo.GetInformations()
-		_, gpuElements := amd.GetInformations()
+		var gpuElements map[string]string
+		if nvidia.Available() {
+			_, gpuElements = nvidia.GetInformations()
+		} else {
+			_, gpuElements = amd.GetInformations()
+		}
 
 		// Update history and calculate min/max values
 		cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuElements)
