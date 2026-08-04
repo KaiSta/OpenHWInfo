@@ -58,7 +58,7 @@ func parseCpuInfo(lines []string) (string, map[string]string) {
 		} else if strings.HasPrefix(line, "vendor_id") {
 			vendorID = strings.TrimSpace(strings.Split(line, ":")[1])
 		} else if strings.HasPrefix(line, "cpu MHz") {
-			cpus["cpu.clock"+strconv.Itoa(len(cpus))] = strings.TrimLeft(strings.Split(line, ":")[1], " ")
+			cpus["cpu.clock"+strconv.Itoa(len(cpus))] = strings.TrimSpace(strings.Split(line, ":")[1]) + " MHz"
 		}
 	}
 

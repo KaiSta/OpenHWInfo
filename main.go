@@ -69,6 +69,17 @@ func init() {
 	templateCache = template.Must(template.ParseGlob("website/*.html"))
 }
 
+func hasUnit(value string) bool {
+	value = strings.TrimSpace(value)
+	units := []string{"°C", "C", "Mhz", "MHz", "W", "MB", "%"}
+	for _, unit := range units {
+		if strings.HasSuffix(value, unit) {
+			return true
+		}
+	}
+	return false
+}
+
 // updateHistoryAndCalculateMinMax updates the history of values and calculates min/max
 func updateHistoryAndCalculateMinMax(history map[string][]float64, currentValues map[string]string) (map[string]string, map[string]string) {
 	minValues := make(map[string]string)
@@ -77,6 +88,10 @@ func updateHistoryAndCalculateMinMax(history map[string][]float64, currentValues
 	// Update history with current values and calculate min/max
 	for key, value := range currentValues {
 		if value == "" {
+			continue
+		}
+
+		if !hasUnit(value) {
 			continue
 		}
 
