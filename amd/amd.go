@@ -12,6 +12,8 @@ import (
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
+var sysDir = "/sys"
+
 func Available() bool {
 	found, _ := probeAMD()
 	return found
@@ -19,7 +21,8 @@ func Available() bool {
 
 func probeAMD() (bool, int) {
 	for i := 0; i < 4; i++ {
-		if _, err := os.Stat(fmt.Sprintf("/sys/class/drm/card%d/device", i)); err == nil {
+		path := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", i))
+		if _, err := os.Stat(path); err == nil {
 			log.Printf("Found AMD card at index %d\n", i)
 			return true, i
 		}
@@ -75,7 +78,7 @@ func GetInformations() shared.HardwareData {
 		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
 	}
 
-	cardPath := fmt.Sprintf("/sys/class/drm/card%d/device/hwmon", cardIndex)
+	cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device/hwmon", cardIndex))
 	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found")
