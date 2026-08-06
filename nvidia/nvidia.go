@@ -3,6 +3,7 @@ package nvidia
 import (
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
@@ -55,81 +56,116 @@ func getDriverVersion() string {
 	return driverVersion
 }
 
-func getGPUTemperature() string {
+func getGPUTemperature() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	temp := strings.TrimSpace(string(output))
-	return temp + " °C"
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(temp); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getGPUHotspotTemperature() string {
+func getGPUHotspotTemperature() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=temperature.memory --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	temp := strings.TrimSpace(string(output))
-	return temp + " °C"
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(temp); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getVRAMTemperature() string {
+func getVRAMTemperature() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=temperature.memory --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	temp := strings.TrimSpace(string(output))
-	return temp + " °C"
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(temp); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getGPUFrequency() string {
+func getGPUFrequency() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=clocks.sm --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	freq := strings.TrimSpace(string(output))
-	return freq + " MHz"
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(freq); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getVRAMFrequency() string {
+func getVRAMFrequency() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=clocks.mem --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	freq := strings.TrimSpace(string(output))
-	return freq + " MHz"
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(freq); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getVRAMTotal() string {
+func getVRAMTotal() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=memory.total --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	vramTotal := strings.TrimSpace(string(output))
-	return vramTotal
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(vramTotal); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getVRAMUsed() string {
+func getVRAMUsed() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=memory.used --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	vramUsed := strings.TrimSpace(string(output))
-	return vramUsed
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(vramUsed); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
 func getVRAMVendor() string {
@@ -137,85 +173,105 @@ func getVRAMVendor() string {
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return ""
 	}
 	vramVendor := strings.TrimSpace(string(output))
 	return vramVendor
 }
 
-func getGPUUsage() string {
+func getGPUUsage() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	usage := strings.TrimSpace(string(output))
-	return usage
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(usage); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getGPUPowerMax() string {
+func getGPUPowerMax() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=power.max --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	power := strings.TrimSpace(string(output))
-	return power
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(power); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getGPUPowerAvg() string {
+func getGPUPowerAvg() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=power.draw --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	power := strings.TrimSpace(string(output))
-	return power
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(power); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func getFanSpeed() string {
+func getFanSpeed() float64 {
 	cmd := exec.Command("sh", "-c", "nvidia-smi --query-gpu=fan.speed --format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing nvidia-smi command: %v\n", err)
-		return "N/A"
+		return -1
 	}
 	fanSpeed := strings.TrimSpace(string(output))
-	return fanSpeed
+
+	// Try to convert to numeric value
+	if val, err := strconv.Atoi(fanSpeed); err == nil {
+		return float64(val)
+	}
+	return -1
 }
 
-func GetInformations() (string, map[string]string) {
-	data := make(map[string]string)
+func GetInformations() shared.HardwareData {
+	data := make(map[string]shared.HardwareValue)
 
 	if !probeNvidia() {
 		log.Println("Returning default info due to no NVIDIA cards found")
-		return "NVIDIA GPU", data
+		return shared.HardwareData{Name: "NVIDIA GPU", Values: data, IsGPU: true}
 	}
 
 	gpuName := getGPUName2()
-	data[shared.GPUName.Key] = gpuName
+	data[shared.GPUName.Key] = shared.NewHardwareValue(gpuName, shared.UnknownUnit, shared.Unknown)
 
 	driverVersion := getDriverVersion()
-	data[shared.GPUDriverVersion.Key] = driverVersion
+	data[shared.GPUDriverVersion.Key] = shared.NewHardwareValue(driverVersion, shared.UnknownUnit, shared.Unknown)
 
-	data[shared.GPUTemp.Key] = getGPUTemperature()
-	data[shared.GPUHotspotTemp.Key] = getGPUHotspotTemperature()
-	data[shared.VRAMTemp.Key] = getVRAMTemperature()
+	data[shared.GPUTemp.Key] = shared.NewHardwareValue(getGPUTemperature(), shared.Celsius, shared.Temperature)
+	data[shared.GPUHotspotTemp.Key] = shared.NewHardwareValue(getGPUHotspotTemperature(), shared.Celsius, shared.Temperature)
+	data[shared.VRAMTemp.Key] = shared.NewHardwareValue(getVRAMTemperature(), shared.Celsius, shared.Temperature)
 
-	data[shared.GPUFrequency.Key] = getGPUFrequency()
-	data[shared.VRAMLrequency.Key] = getVRAMFrequency()
+	data[shared.GPUFrequency.Key] = shared.NewHardwareValue(getGPUFrequency(), shared.MHz, shared.Frequency)
+	data[shared.VRAMLrequency.Key] = shared.NewHardwareValue(getVRAMFrequency(), shared.MHz, shared.Frequency)
 
-	data[shared.VRAMTotal.Key] = getVRAMTotal()
-	data[shared.VRAMUsed.Key] = getVRAMUsed()
-	data[shared.VRAMVendor.Key] = getVRAMVendor()
+	data[shared.VRAMTotal.Key] = shared.NewHardwareValue(getVRAMTotal(), shared.Megabyte, shared.Memory)
+	data[shared.VRAMUsed.Key] = shared.NewHardwareValue(getVRAMUsed(), shared.Megabyte, shared.Memory)
+	data[shared.VRAMVendor.Key] = shared.NewHardwareValue(getVRAMVendor(), shared.UnknownUnit, shared.Unknown)
 
-	data[shared.GPUUsage.Key] = getGPUUsage()
-	data[shared.GPUPowerMax.Key] = getGPUPowerMax()
-	data[shared.GPUPowerAvg.Key] = getGPUPowerAvg()
-	data[shared.FanSpeed.Key] = getFanSpeed()
+	data[shared.GPUUsage.Key] = shared.NewHardwareValue(getGPUUsage(), shared.Percent, shared.Usage)
+	data[shared.GPUPowerMax.Key] = shared.NewHardwareValue(getGPUPowerMax(), shared.Watt, shared.Power)
+	data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(getGPUPowerAvg(), shared.Watt, shared.Power)
+	data[shared.FanSpeed.Key] = shared.NewHardwareValue(getFanSpeed(), shared.RPM, shared.Unknown)
 
-	return gpuName, data
+	return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
 }

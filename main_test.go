@@ -3,40 +3,17 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/KaiSta/OpenHWInfo/shared"
 )
-
-func TestHasUnit(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"45.0 °C", true},
-		{"45C", true},
-		{"1200.00 MHz", true},
-		{"1500 Mhz", true},
-		{"150 W", true},
-		{"8192 MB", true},
-		{"12%", true},
-		{"1200.00", false},
-		{"Intel Core", false},
-		{"", false},
-	}
-
-	for _, test := range tests {
-		actual := hasUnit(test.input)
-		if actual != test.expected {
-			t.Errorf("hasUnit(%q) = %v; expected %v", test.input, actual, test.expected)
-		}
-	}
-}
 
 func TestUpdateHistoryAndCalculateMinMax(t *testing.T) {
 	history := make(map[string][]float64)
-	currentValues := map[string]string{
-		"cpu.temp":   "50C",
-		"cpu.clock0": "3800.00 MHz",
-		"cpu.brand":  "Intel Core",
-		"gpu.temp":   "60 °C",
+	currentValues := map[string]shared.HardwareValue{
+		"cpu.temp":   {Value: "50C", Unit: shared.Celsius, Type: shared.Temperature},
+		"cpu.clock0": {Value: "3800.00 MHz", Unit: shared.MHz, Type: shared.Frequency},
+		"cpu.brand":  {Value: "Intel Core", Unit: shared.UnknownUnit, Type: shared.Unknown},
+		"gpu.temp":   {Value: "60 °C", Unit: shared.Celsius, Type: shared.Temperature},
 	}
 
 	minValues, maxValues := updateHistoryAndCalculateMinMax(history, currentValues)

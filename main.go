@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
@@ -69,40 +67,27 @@ func init() {
 	templateCache = template.Must(template.ParseGlob("website/*.html"))
 }
 
-func hasUnit(value string) bool {
-	value = strings.TrimSpace(value)
-	units := []string{"°C", "C", "Mhz", "MHz", "W", "MB", "%"}
-	for _, unit := range units {
-		if strings.HasSuffix(value, unit) {
-			return true
-		}
-	}
-	return false
-}
-
 // updateHistoryAndCalculateMinMax updates the history of values and calculates min/max
-func updateHistoryAndCalculateMinMax(history map[string][]float64, currentValues map[string]string) (map[string]string, map[string]string) {
+func updateHistoryAndCalculateMinMax(history map[string][]float64, currentValues map[string]shared.HardwareValue) (map[string]string, map[string]string) {
 	minValues := make(map[string]string)
 	maxValues := make(map[string]string)
 
 	// Update history with current values and calculate min/max
 	for key, value := range currentValues {
-		if value == "" {
+		if value.Value == "" {
 			continue
 		}
 
-		if !hasUnit(value) {
+		// Check if this value is numeric type that can be used for min/max calculation
+		if !value.IsNumericType() {
 			continue
 		}
 
-		// Parse the numeric value from the string (remove units like "C", "Mhz", etc.)
-		numStr := parseNumericValue(value)
-		if numStr == "" {
-			continue
-		}
-
-		num, err := strconv.ParseFloat(numStr, 64)
+		// Extract the numeric value directly from the HardwareValue
+		num, err := value.GetNumericValue()
 		if err != nil {
+			// Log error but continue processing other values
+			fmt.Printf("Error parsing numeric value for %s: %v\n", key, err)
 			continue
 		}
 
@@ -121,33 +106,6 @@ func updateHistoryAndCalculateMinMax(history map[string][]float64, currentValues
 	}
 
 	return minValues, maxValues
-}
-
-// parseNumericValue extracts the numeric part from a value string
-func parseNumericValue(value string) string {
-	// Remove common units and symbols
-	value = strings.TrimSpace(value)
-	value = strings.ReplaceAll(value, " °C", "")
-	value = strings.ReplaceAll(value, "C", "")
-	value = strings.ReplaceAll(value, " Mhz", "")
-	value = strings.ReplaceAll(value, " MHz", "")
-	value = strings.ReplaceAll(value, " W", "")
-	value = strings.ReplaceAll(value, " MB", "")
-	value = strings.ReplaceAll(value, "%", "")
-
-	// Extract the first numeric part
-	for i := 0; i < len(value); i++ {
-		if value[i] == '.' || (value[i] >= '0' && value[i] <= '9') {
-			// Find the end of the number
-			j := i
-			for j < len(value) && (value[j] == '.' || value[j] >= '0' && value[j] <= '9') {
-				j++
-			}
-			return value[i:j]
-		}
-	}
-
-	return ""
 }
 
 // calculateMinMax calculates min and max from a slice of float64 values
@@ -173,22 +131,22 @@ func calculateMinMax(values []float64) (float64, float64) {
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, cpuElements := cpuinfo.GetInformations()
-		var gpuElements map[string]string
+		cpuData := cpuinfo.GetInformations()
+		var gpuData shared.HardwareData
 		if nvidia.Available() {
-			_, gpuElements = nvidia.GetInformations()
+			gpuData = nvidia.GetInformations()
 		} else {
-			_, gpuElements = amd.GetInformations()
+			gpuData = amd.GetInformations()
 		}
 
 		// Update history and calculate min/max values
-		cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuElements)
-		gpuMinValues, gpuMaxValues := updateHistoryAndCalculateMinMax(gpuHistory, gpuElements)
+		cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuData.Values)
+		gpuMinValues, gpuMaxValues := updateHistoryAndCalculateMinMax(gpuHistory, gpuData.Values)
 
 		// Filter CPU keys to only show those with available values
 		var filteredCpuKeys []shared.KeyTemplate
 		for _, key := range cpuTemplates {
-			if value, exists := cpuElements[key.Key]; exists && value != "" {
+			if value, exists := cpuData.Values[key.Key]; exists && value.Value != "" {
 				filteredCpuKeys = append(filteredCpuKeys, key)
 			}
 		}
@@ -196,16 +154,41 @@ func main() {
 		// Filter GPU keys to only show those with available values
 		var filteredGpuKeys []shared.KeyTemplate
 		for _, key := range gpuTemplates {
-			if value, exists := gpuElements[key.Key]; exists && value != "" {
+			if value, exists := gpuData.Values[key.Key]; exists && value.Value != "" {
 				filteredGpuKeys = append(filteredGpuKeys, key)
+			}
+		}
+
+		// Create a map of string values for display purposes
+		cpuStringValues := make(map[string]string)
+		for key, value := range cpuData.Values {
+			// Convert interface{} to string properly
+			if valStr, ok := value.Value.(string); ok {
+				cpuStringValues[key] = valStr
+			} else if valFloat, ok := value.Value.(float64); ok {
+				cpuStringValues[key] = fmt.Sprintf("%.2f", valFloat)
+			} else {
+				cpuStringValues[key] = fmt.Sprintf("%v", value.Value)
+			}
+		}
+
+		gpuStringValues := make(map[string]string)
+		for key, value := range gpuData.Values {
+			// Convert interface{} to string properly
+			if valStr, ok := value.Value.(string); ok {
+				gpuStringValues[key] = valStr
+			} else if valFloat, ok := value.Value.(float64); ok {
+				gpuStringValues[key] = fmt.Sprintf("%.2f", valFloat)
+			} else {
+				gpuStringValues[key] = fmt.Sprintf("%v", value.Value)
 			}
 		}
 
 		data := Data{
 			CpuKeys:      filteredCpuKeys,
 			GpuKeys:      filteredGpuKeys,
-			CpuValues:    cpuElements,
-			GpuValues:    gpuElements,
+			CpuValues:    cpuStringValues,
+			GpuValues:    gpuStringValues,
 			CpuMinValues: cpuMinValues,
 			CpuMaxValues: cpuMaxValues,
 			GpuMinValues: gpuMinValues,
