@@ -19,30 +19,50 @@ const intelVendorID = "0x8086"
 
 // Available reports whether an Intel graphics card is present on the system.
 func Available() bool {
-	found, _ := probeIntel()
-	return found
+	cards, _ := probeIntel()
+	return len(cards) > 0
 }
 
-// probeIntel scans the DRM cards and returns the index of the first Intel card,
-// identified by its PCI vendor ID.
-func probeIntel() (bool, int) {
-	for i := 0; i < 8; i++ {
+// probeIntel scans the DRM cards and returns the indices of all Intel cards,
+// identified by their PCI vendor ID.
+func probeIntel() ([]int, error) {
+	var indices []int
+	for i := 0; i < 16; i++ {
 		devicePath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", i))
 		if _, err := os.Stat(devicePath); err != nil {
 			continue
 		}
 		if vendor, ok := readSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == intelVendorID {
 			log.Printf("Found Intel card at index %d\n", i)
-			return true, i
+			indices = append(indices, i)
 		}
 	}
-	log.Println("No Intel cards found")
-	return false, -1
+	if len(indices) == 0 {
+		log.Println("No Intel cards found")
+	}
+	return indices, nil
 }
 
-// getGPUName returns a human readable name for the Intel GPU, falling back to
-// the OpenGL renderer string and finally a generic label.
-func getGPUName() string {
+// resolvePCIDevice reads the symlink at class/drm/cardN/device and returns
+// the PCI address (e.g. "0000:00:02.0"). Empty string on error.
+func resolvePCIDevice(cardIndex int) string {
+	link, err := os.Readlink(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex)))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(link, "/")
+	return parts[len(parts)-1]
+}
+
+// getGPUName returns a human readable name for the Intel GPU at the given DRM
+// index, preferring a PCI-address-scoped lspci query so that multi-GPU systems
+// get the correct name per card.
+func getGPUName(cardIndex int) string {
+	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
+		if line := strings.TrimSpace(runShell("lspci -s " + pciAddr)); line != "" {
+			return line
+		}
+	}
 	name := firstNonEmpty(
 		runShell("lspci | grep -i 'intel' | grep -iE 'vga|3d'"),
 		runShell("lspci | grep -i 'intel'"),
@@ -93,22 +113,17 @@ func getDriverVersion() string {
 	return "Intel Driver"
 }
 
-// GetInformations collects the hardware metrics available for the Intel GPU.
-// Integrated graphics do not expose discrete VRAM, fan speed or busy percent,
-// so those keys are only set when the underlying sysfs file is present.
-func GetInformations() shared.HardwareData {
+// collectGPUDataForCard collects the hardware metrics available for a single
+// Intel GPU at the given card path. Integrated graphics do not expose discrete
+// VRAM, fan speed or busy percent, so those keys are only set when the
+// underlying sysfs file is present.
+func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	data := make(map[string]shared.HardwareValue)
-	gpuName := getGPUName()
+	gpuName := getGPUName(cardIndex)
 	data[shared.GPUName.Key] = shared.NewHardwareValue(gpuName, shared.UnknownUnit, shared.Unknown)
 	data[shared.GPUDriverVersion.Key] = shared.NewHardwareValue(getDriverVersion(), shared.UnknownUnit, shared.Unknown)
 
-	found, cardIndex := probeIntel()
-	if !found {
-		log.Println("Returning default info due to no Intel cards found")
-		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
-	}
-
-	cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device/hwmon", cardIndex))
+	cardPath = filepath.Join(cardPath, "hwmon")
 	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found for Intel card")
@@ -140,6 +155,34 @@ func GetInformations() shared.HardwareData {
 	}
 
 	return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
+}
+
+// GetInformations collects the hardware metrics available for the first Intel GPU.
+func GetInformations() shared.HardwareData {
+	all := GetAllInformations()
+	if len(all) == 0 {
+		return shared.HardwareData{Name: "Intel GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true}
+	}
+	return all[0]
+}
+
+// GetAllInformations returns the information for every Intel card on the system.
+func GetAllInformations() []shared.HardwareData {
+	cards, err := probeIntel()
+	if err != nil || len(cards) == 0 {
+		log.Println("Returning default info due to no Intel cards found")
+		return []shared.HardwareData{
+			{Name: "Intel GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true},
+		}
+	}
+
+	var result []shared.HardwareData
+	for _, cardIndex := range cards {
+		cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex))
+		log.Printf("Collecting information for Intel card %d\n", cardIndex)
+		result = append(result, collectGPUDataForCard(cardPath, cardIndex))
+	}
+	return result
 }
 
 func findFirstSubpath(basePath string, pattern string) string {

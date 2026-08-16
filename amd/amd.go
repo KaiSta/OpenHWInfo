@@ -14,95 +14,108 @@ import (
 
 var sysDir = "/sys"
 
+// amdVendorID is the PCI vendor ID for AMD devices (0x1002).
+const amdVendorID = "0x1002"
+
+// Available reports whether an AMD graphics card is present on the system.
 func Available() bool {
-	found, _ := probeAMD()
-	return found
+	cards, _ := probeAMD()
+	return len(cards) > 0
 }
 
-func probeAMD() (bool, int) {
-	for i := 0; i < 4; i++ {
-		path := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", i))
-		if _, err := os.Stat(path); err == nil {
+// probeAMD scans the DRM cards and returns the indices of all AMD cards,
+// identified by their PCI vendor ID.
+func probeAMD() ([]int, error) {
+	var indices []int
+	for i := 0; i < 16; i++ {
+		devicePath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", i))
+		if _, err := os.Stat(devicePath); err != nil {
+			continue
+		}
+		if vendor, ok := readSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == amdVendorID {
 			log.Printf("Found AMD card at index %d\n", i)
-			return true, i
+			indices = append(indices, i)
 		}
 	}
-	log.Println("No AMD cards found")
-	return false, -1
+	if len(indices) == 0 {
+		// Fallback: check via lspci
+		lspciOut := runShell("lspci | grep -i 'vga\\|3d'")
+		if strings.Contains(strings.ToLower(lspciOut), "advanced micro devices") ||
+			strings.Contains(strings.ToLower(lspciOut), "amd") {
+			log.Println("Found AMD card via lspci (fallback)")
+			indices = append(indices, 0)
+		} else {
+			log.Println("No AMD cards found")
+		}
+	}
+	return indices, nil
 }
 
-func getGPUName() string {
+// resolvePCIDevice reads the symlink at class/drm/cardN/device and returns
+// the PCI address (e.g. "0000:0c:00.0"). Empty string on error.
+func resolvePCIDevice(cardIndex int) string {
+	link, err := os.Readlink(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex)))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(link, "/")
+	return parts[len(parts)-1]
+}
+
+// getGPUName returns a human-readable GPU name for the card at the given DRM
+// index, preferring a PCI-address-scoped lspci query so that multi-GPU systems
+// get the correct name per card.
+func getGPUName(cardIndex int) string {
+	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
+		if line := strings.TrimSpace(runShell("lspci -s " + pciAddr)); line != "" {
+			return line
+		}
+	}
+	// Fallback: list all VGA/3D cards and pick by index.
 	cmd := exec.Command("sh", "-c", "lspci | grep -i 'vga\\|3d'")
 	output, err := cmd.Output()
 	if err != nil {
 		log.Printf("Error executing lspci command: %v\n", err)
 		return "AMD GPU"
 	}
-	gpuName := strings.TrimSpace(string(output))
-
-	// Split into parts and find the manufacturer name
-	parts := strings.Fields(gpuName)
-	for i, part := range parts {
-		if part == "Advanced" && len(parts) > i+1 && parts[i+1] == "Micro" {
-			// Return everything from "Advanced Micro Devices..." onwards
-			return strings.Join(parts[i:], " ")
-		}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if cardIndex < len(lines) {
+		return lines[cardIndex]
 	}
-	return gpuName
+	return "AMD GPU"
 }
 
-func getGPUName2() string {
-	cmd := exec.Command("sh", "-c", "glxinfo | grep 'OpenGL renderer'")
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("Error executing glxinfo command: %v\n", err)
-		return "AMD GPU"
-	}
-	gpuName := strings.TrimSpace(string(output))
-	// Extract just the renderer name
-	parts := strings.Split(gpuName, ":")
-	if len(parts) > 1 {
-		return strings.TrimSpace(parts[1])
-	}
-	return gpuName
-}
-
-func GetInformations() shared.HardwareData {
+// collectGPUDataForCard collects the hardware metrics available for a single
+// AMD GPU at the given card path.
+func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	data := make(map[string]shared.HardwareValue)
-	gpuName := getGPUName2()
+	gpuName := getGPUName(cardIndex)
 	data[shared.GPUName.Key] = shared.NewHardwareValue(gpuName, shared.UnknownUnit, shared.Unknown)
 
-	found, cardIndex := probeAMD()
-	if !found {
-		log.Println("Returning default info due to no AMD cards found")
-		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
-	}
-
-	cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device/hwmon", cardIndex))
+	cardPath = filepath.Join(cardPath, "hwmon")
 	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found")
 		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
 	}
 
+	devicePath := filepath.Join(hwmonPath, "device")
+
 	parseTemperatureValue(&data, hwmonPath, "temp1_input", shared.GPUTemp.Key)
 	parseTemperatureValue(&data, hwmonPath, "temp2_input", shared.GPUHotspotTemp.Key)
 	parseTemperatureValue(&data, hwmonPath, "temp3_input", shared.VRAMTemp.Key)
 
-	// Read GPU frequency (freq1_input) and convert to MHz
+	// GPU frequency (freq1_input) and convert to MHz
 	gpuFreq := readSysValue(filepath.Join(hwmonPath, "freq1_input"))
 	if gpuFreq != "" {
 		data[shared.GPUFrequency.Key] = shared.NewHardwareValue(parseFrequencyValue(gpuFreq), shared.MHz, shared.Frequency)
 	}
 
-	// Read memory frequency (freq2_input) and convert to MHz
+	// Memory frequency (freq2_input) and convert to MHz
 	memFreq := readSysValue(filepath.Join(hwmonPath, "freq2_input"))
 	if memFreq != "" {
 		data[shared.VRAMLrequency.Key] = shared.NewHardwareValue(parseFrequencyValue(memFreq), shared.MHz, shared.Frequency)
 	}
-
-	// Append hwmon to the card path
-	devicePath := filepath.Join(hwmonPath, "device")
 
 	data[shared.VRAMTotal.Key] = shared.NewHardwareValue(parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total")), shared.Megabyte, shared.Memory)
 	data[shared.VRAMUsed.Key] = shared.NewHardwareValue(parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used")), shared.Megabyte, shared.Memory)
@@ -111,9 +124,40 @@ func GetInformations() shared.HardwareData {
 	data[shared.GPUUsage.Key] = shared.NewHardwareValue(parseGPUUsage(readSysValue(filepath.Join(devicePath, "gpu_busy_percent"))), shared.Percent, shared.Usage)
 	data[shared.GPUPowerMax.Key] = shared.NewHardwareValue(parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_cap_max")), 1000000), shared.Watt, shared.Power)
 	data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_average")), 1000000), shared.Watt, shared.Power)
-	data[shared.FanSpeed.Key] = shared.NewHardwareValue(readSysValue(filepath.Join(hwmonPath, "fan1_input")), shared.RPM, shared.Frequency)
+	fanSpeed := readSysValue(filepath.Join(hwmonPath, "fan1_input"))
+	if fanSpeed != "0" && fanSpeed != "" {
+		data[shared.FanSpeed.Key] = shared.NewHardwareValue(fanSpeed, shared.RPM, shared.Frequency)
+	}
 
 	return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
+}
+
+// GetInformations collects the hardware metrics available for the first AMD GPU.
+func GetInformations() shared.HardwareData {
+	all := GetAllInformations()
+	if len(all) == 0 {
+		return shared.HardwareData{Name: "AMD GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true}
+	}
+	return all[0]
+}
+
+// GetAllInformations returns the information for every AMD card on the system.
+func GetAllInformations() []shared.HardwareData {
+	cards, err := probeAMD()
+	if err != nil || len(cards) == 0 {
+		log.Println("Returning default info due to no AMD cards found")
+		return []shared.HardwareData{
+			{Name: "AMD GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true},
+		}
+	}
+
+	var result []shared.HardwareData
+	for _, cardIndex := range cards {
+		cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex))
+		log.Printf("Collecting information for AMD card %d\n", cardIndex)
+		result = append(result, collectGPUDataForCard(cardPath, cardIndex))
+	}
+	return result
 }
 
 func findFirstSubpath(basePath string, pattern string) string {
@@ -131,6 +175,14 @@ func readSysValue(path string) string {
 		return "0"
 	}
 	return strings.TrimSpace(string(content))
+}
+
+func readSysFile(path string) (string, bool) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(content)), true
 }
 
 func parseTemperatureValue(data *map[string]shared.HardwareValue, hwmonPath string, fileName string, dataKey ...string) {
@@ -186,4 +238,12 @@ func parseGPUUsage(value string) float64 {
 	}
 
 	return -1
+}
+
+func runShell(command string) string {
+	output, err := exec.Command("sh", "-c", command).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }

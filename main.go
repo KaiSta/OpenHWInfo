@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strings"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
@@ -12,15 +13,21 @@ import (
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
+// GPUView holds the data for a single GPU in the template.
+type GPUView struct {
+	Name      string
+	Keys      []shared.KeyTemplate
+	Values    map[string]string
+	MinValues map[string]string
+	MaxValues map[string]string
+}
+
 type Data struct {
 	CpuKeys      []shared.KeyTemplate
-	GpuKeys      []shared.KeyTemplate
+	GpuViews     []GPUView
 	CpuValues    map[string]string
-	GpuValues    map[string]string
 	CpuMinValues map[string]string
 	CpuMaxValues map[string]string
-	GpuMinValues map[string]string
-	GpuMaxValues map[string]string
 }
 
 var cpuTemplates = []shared.KeyTemplate{
@@ -58,6 +65,13 @@ var gpuTemplates = []shared.KeyTemplate{
 	shared.FanSpeed,
 }
 
+// gpuHistoryKey builds a unique history key for a metric belonging to a
+// specific GPU.  The prefix ensures that min/max tracking for GPU 0 does not
+// interfere with GPU 1, etc.
+func gpuHistoryKey(gpuIndex int, metricKey string) string {
+	return fmt.Sprintf("gpu%d.%s", gpuIndex, metricKey)
+}
+
 // Global maps to track historical values for min/max calculations
 var cpuHistory = make(map[string][]float64)
 var gpuHistory = make(map[string][]float64)
@@ -87,7 +101,6 @@ func updateHistoryAndCalculateMinMax(history map[string][]float64, currentValues
 		// Extract the numeric value directly from the HardwareValue
 		num, err := value.GetNumericValue()
 		if err != nil {
-			// Log error but continue processing other values
 			fmt.Printf("Error parsing numeric value for %s: %v\n", key, err)
 			continue
 		}
@@ -130,21 +143,95 @@ func calculateMinMax(values []float64) (float64, float64) {
 	return min, max
 }
 
+// formatValue converts a HardwareValue to a display string.
+func formatValue(value shared.HardwareValue) string {
+	if valStr, ok := value.Value.(string); ok {
+		return valStr
+	}
+	if valFloat, ok := value.Value.(float64); ok {
+		return fmt.Sprintf("%.2f", valFloat)
+	}
+	return fmt.Sprintf("%v", value.Value)
+}
+
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Collect CPU data
 		cpuData := cpuinfo.GetInformations()
-		var gpuData shared.HardwareData
+
+		// Collect GPU data from all available sources
+		var allGPUs []shared.HardwareData
+		usedGPU := false
+
 		if nvidia.Available() {
-			gpuData = nvidia.GetInformations()
-		} else if intel.Available() {
-			gpuData = intel.GetInformations()
-		} else {
-			gpuData = amd.GetInformations()
+			allGPUs = nvidia.GetAllInformations()
+			usedGPU = true
+		}
+		if intel.Available() {
+			allGPUs = append(allGPUs, intel.GetAllInformations()...)
+			usedGPU = true
+		}
+		if amd.Available() {
+			allGPUs = append(allGPUs, amd.GetAllInformations()...)
+			usedGPU = true
 		}
 
-		// Update history and calculate min/max values
-		cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuData.Values)
-		gpuMinValues, gpuMaxValues := updateHistoryAndCalculateMinMax(gpuHistory, gpuData.Values)
+		// If no GPU was found, add a placeholder
+		if !usedGPU {
+			allGPUs = append(allGPUs, shared.HardwareData{Name: "No GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true})
+		}
+
+		// Build per-GPU view data
+		var gpuViews []GPUView
+		for gpuIdx, gpuData := range allGPUs {
+			// Filter keys to only show those with available values
+			var filteredKeys []shared.KeyTemplate
+			for _, key := range gpuTemplates {
+				if value, exists := gpuData.Values[key.Key]; exists && value.Value != "" {
+					filteredKeys = append(filteredKeys, key)
+				}
+			}
+
+			// Build string values map
+			stringValues := make(map[string]string)
+			for key, value := range gpuData.Values {
+				stringValues[key] = formatValue(value)
+			}
+
+			// Build a subset of values that use prefixed keys for per-GPU history tracking.
+			prefixedValues := make(map[string]shared.HardwareValue)
+			for k, v := range gpuData.Values {
+				if v.IsNumericType() {
+					prefixedKey := gpuHistoryKey(gpuIdx, k)
+					prefixedValues[prefixedKey] = v
+				}
+			}
+
+			// Calculate min/max using prefixed history keys (so each GPU's
+			// history is tracked independently), then remap them back to the
+			// plain metric keys that the template uses for lookups.
+			minValues, maxValues := updateHistoryAndCalculateMinMax(gpuHistory, prefixedValues)
+
+			remap := func(src map[string]string) map[string]string {
+				dst := make(map[string]string, len(src))
+				for k, v := range src {
+					if strings.HasPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".") {
+						dst[strings.TrimPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".")] = v
+					}
+				}
+				return dst
+			}
+			minValues = remap(minValues)
+			maxValues = remap(maxValues)
+
+			gpuViews = append(gpuViews, GPUView{
+				Name:      gpuData.Name,
+				Keys:      filteredKeys,
+				Values:    stringValues,
+				MinValues: minValues,
+				MaxValues: maxValues,
+			})
+		}
 
 		// Filter CPU keys to only show those with available values
 		var filteredCpuKeys []shared.KeyTemplate
@@ -154,48 +241,21 @@ func main() {
 			}
 		}
 
-		// Filter GPU keys to only show those with available values
-		var filteredGpuKeys []shared.KeyTemplate
-		for _, key := range gpuTemplates {
-			if value, exists := gpuData.Values[key.Key]; exists && value.Value != "" {
-				filteredGpuKeys = append(filteredGpuKeys, key)
-			}
-		}
-
 		// Create a map of string values for display purposes
 		cpuStringValues := make(map[string]string)
 		for key, value := range cpuData.Values {
-			// Convert interface{} to string properly
-			if valStr, ok := value.Value.(string); ok {
-				cpuStringValues[key] = valStr
-			} else if valFloat, ok := value.Value.(float64); ok {
-				cpuStringValues[key] = fmt.Sprintf("%.2f", valFloat)
-			} else {
-				cpuStringValues[key] = fmt.Sprintf("%v", value.Value)
-			}
+			cpuStringValues[key] = formatValue(value)
 		}
 
-		gpuStringValues := make(map[string]string)
-		for key, value := range gpuData.Values {
-			// Convert interface{} to string properly
-			if valStr, ok := value.Value.(string); ok {
-				gpuStringValues[key] = valStr
-			} else if valFloat, ok := value.Value.(float64); ok {
-				gpuStringValues[key] = fmt.Sprintf("%.2f", valFloat)
-			} else {
-				gpuStringValues[key] = fmt.Sprintf("%v", value.Value)
-			}
-		}
+		// Update history and calculate min/max values for CPU
+		cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuData.Values)
 
 		data := Data{
 			CpuKeys:      filteredCpuKeys,
-			GpuKeys:      filteredGpuKeys,
+			GpuViews:     gpuViews,
 			CpuValues:    cpuStringValues,
-			GpuValues:    gpuStringValues,
 			CpuMinValues: cpuMinValues,
 			CpuMaxValues: cpuMaxValues,
-			GpuMinValues: gpuMinValues,
-			GpuMaxValues: gpuMaxValues,
 		}
 
 		err := templateCache.ExecuteTemplate(w, "index.html", data)

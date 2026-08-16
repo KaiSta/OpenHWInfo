@@ -20,9 +20,10 @@ func TestGetInformationsWithIntelCard(t *testing.T) {
 		sysDir = originalSysDir
 	}()
 
-	// Construct the mock path structure
+	// Intel code looks for hwmon at card0/device/hwmon/hwmon0, then device at hwmon0/device
 	cardIndex := 0
-	cardDevicePath := filepath.Join(tempDir, "class/drm", fmt.Sprintf("card%d/device", cardIndex))
+	cardDir := filepath.Join(tempDir, "class/drm", fmt.Sprintf("card%d", cardIndex))
+	cardDevicePath := filepath.Join(cardDir, "device")
 	hwmonDir := filepath.Join(cardDevicePath, "hwmon", "hwmon0")
 
 	// Create directories
@@ -112,6 +113,69 @@ func TestGetInformationsWithIntelCard(t *testing.T) {
 	for _, key := range []string{shared.VRAMTotal.Key, shared.VRAMUsed.Key, shared.VRAMVendor.Key} {
 		if _, exists := info.Values[key]; exists {
 			t.Errorf("did not expect %s to be present in hardware values for Intel", key)
+		}
+	}
+}
+
+func TestGetAllInformationsMultipleCards(t *testing.T) {
+	// Create a temporary directory to mock /sys
+	tempDir := t.TempDir()
+
+	// Backup original sysDir and restore after test
+	originalSysDir := sysDir
+	sysDir = tempDir
+	defer func() {
+		sysDir = originalSysDir
+	}()
+
+	// Intel code looks for hwmon at cardX/device/hwmon/hwmonY, then device at hwmonY/device
+	for cardIndex := 0; cardIndex < 2; cardIndex++ {
+		cardDir := filepath.Join(tempDir, "class/drm", fmt.Sprintf("card%d", cardIndex))
+		cardDevicePath := filepath.Join(cardDir, "device")
+		hwmonDir := filepath.Join(cardDevicePath, "hwmon", fmt.Sprintf("hwmon%d", cardIndex))
+
+		err := os.MkdirAll(hwmonDir, 0755)
+		if err != nil {
+			t.Fatalf("failed to create mock directories for card %d: %v", cardIndex, err)
+		}
+
+		files := map[string]string{
+			filepath.Join(cardDevicePath, "vendor"): "0x8086",
+			filepath.Join(hwmonDir, "temp1_input"):  fmt.Sprintf("%d000", 40+cardIndex*10),
+			filepath.Join(hwmonDir, "freq0_input"):  fmt.Sprintf("%d000000000", 13+cardIndex),
+		}
+
+		for path, content := range files {
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatalf("failed to create parent directory for %s: %v", path, err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				t.Fatalf("failed to write mock file %s: %v", path, err)
+			}
+		}
+	}
+
+	// GetAllInformations should return both cards
+	gpus := GetAllInformations()
+	if len(gpus) != 2 {
+		t.Errorf("expected 2 GPUs, got %d", len(gpus))
+	}
+
+	// Verify each GPU has temperature data
+	for i, gpu := range gpus {
+		tempVal, ok := gpu.Values[shared.GPUTemp.Key]
+		if !ok {
+			t.Errorf("expected %s to be present for GPU %d", shared.GPUTemp.Key, i)
+			continue
+		}
+		tempNum, err := tempVal.GetNumericValue()
+		if err != nil {
+			t.Errorf("failed to get numeric value for GPU %d temperature: %v", i, err)
+			continue
+		}
+		expectedTemp := float64(40 + i*10)
+		if tempNum != expectedTemp {
+			t.Errorf("expected GPU %d temperature to be %f, got %f", i, expectedTemp, tempNum)
 		}
 	}
 }

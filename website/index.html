@@ -29,6 +29,14 @@
             background-color: #4CAF50;
             color: white;
         }
+
+        h2 {
+            margin-top: 30px;
+        }
+
+        h3 {
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -51,6 +59,9 @@
         {{end}}
     </table>
     <h2>GPU Information</h2>
+    {{range .GpuViews}}
+    {{ $gpu := . }}
+    <h3>{{ $gpu.Name }}</h3>
     <img src="/resources/gpu.jpg" alt="GPU Icon" width="64" height="64">
     <table>
         <tr>
@@ -59,15 +70,16 @@
             <th>Min Value</th>
             <th>Max Value</th>
         </tr>
-        {{range .GpuKeys}}
+        {{range $gpu.Keys}}
             <tr>
                 <td>{{.Label}}</td>
-                <td>{{index $.GpuValues .Key}}</td>
-                <td>{{index $.GpuMinValues .Key}}</td>
-                <td>{{index $.GpuMaxValues .Key}}</td>
+                <td>{{index $gpu.Values .Key}}</td>
+                <td>{{index $gpu.MinValues .Key}}</td>
+                <td>{{index $gpu.MaxValues .Key}}</td>
             </tr>
         {{end}}
     </table>
+    {{end}}
     <script>
         setTimeout(function() {
             window.location.reload();
