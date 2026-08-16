@@ -1,6 +1,7 @@
 package nvidia
 
 import (
+	"encoding/csv"
 	"log"
 	"os/exec"
 	"strconv"
@@ -11,7 +12,9 @@ import (
 )
 
 // gpuQueryFields lists the metrics queried per GPU, in the same order as the
-// CSV columns returned by nvidia-smi.
+// CSV columns returned by nvidia-smi. Every entry must be a valid field name
+// for --query-gpu: if even one is invalid, nvidia-smi exits with an error and
+// produces no output at all.
 var gpuQueryFields = []string{
 	"name",
 	"driver_version",
@@ -25,7 +28,6 @@ var gpuQueryFields = []string{
 	"power.limit",
 	"power.draw",
 	"fan.speed",
-	"vbios.version",
 }
 
 func Available() bool {
@@ -88,9 +90,9 @@ func runShell(command string) string {
 }
 
 // parseFloatField extracts the leading numeric value from a nvidia-smi CSV
-// field, which may be followed by a unit (e.g. "10240 MiB", "45 %") or be
-// unavailable ("[N/A]").
-func parseFloatField(s string) float64 {
+// field, which may be followed by a unit (e.g. "10240 MiB", "45 %"). It
+// reports false when no number is available ("[N/A]", empty string).
+func parseFloatField(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
 	end := len(s)
 	for i, c := range s {
@@ -99,10 +101,22 @@ func parseFloatField(s string) float64 {
 			break
 		}
 	}
-	if val, err := strconv.ParseFloat(s[:end], 64); err == nil {
-		return val
+	val, err := strconv.ParseFloat(s[:end], 64)
+	if err != nil {
+		return 0, false
 	}
-	return -1
+	return val, true
+}
+
+// parseCSVFields splits one line of nvidia-smi CSV output into fields. A real
+// CSV parser is used so that values containing commas (e.g. some GPU names)
+// do not shift the column alignment.
+func parseCSVFields(line string) []string {
+	records, err := csv.NewReader(strings.NewReader(line)).Read()
+	if err != nil {
+		return strings.Split(line, ",")
+	}
+	return records
 }
 
 // getInformationsForGPU collects all metrics for a single GPU index using one
@@ -113,7 +127,7 @@ func getInformationsForGPU(index int) shared.HardwareData {
 
 	query := strings.Join(gpuQueryFields, ",")
 	output := runShell("nvidia-smi -i " + strconv.Itoa(index) + " --query-gpu=" + query + " --format=csv,noheader")
-	fields := strings.Split(output, ",")
+	fields := parseCSVFields(output)
 
 	field := func(i int) string {
 		if i < len(fields) {
@@ -122,7 +136,7 @@ func getInformationsForGPU(index int) shared.HardwareData {
 		return ""
 	}
 
-	if len(fields) > 0 && field(0) != "" {
+	if field(0) != "" {
 		name = field(0)
 	}
 	data[shared.GPUName.Key] = shared.NewHardwareValue(name, shared.UnknownUnit, shared.Unknown)
@@ -133,21 +147,25 @@ func getInformationsForGPU(index int) shared.HardwareData {
 	}
 	data[shared.GPUDriverVersion.Key] = shared.NewHardwareValue(driverVersion, shared.UnknownUnit, shared.Unknown)
 
-	data[shared.GPUTemp.Key] = shared.NewHardwareValue(parseFloatField(field(2)), shared.Celsius, shared.Temperature)
-	data[shared.GPUHotspotTemp.Key] = shared.NewHardwareValue(parseFloatField(field(3)), shared.Celsius, shared.Temperature)
-	data[shared.VRAMTemp.Key] = shared.NewHardwareValue(parseFloatField(field(3)), shared.Celsius, shared.Temperature)
+	// Only metrics the driver actually reports are added; values reported as
+	// "[N/A]" (or a failed nvidia-smi call) are omitted so they do not show
+	// up as bogus -1 readings.
+	setNumeric := func(key string, i int, unit shared.HardwareUnit, valueType shared.HardwareValueType) {
+		if val, ok := parseFloatField(field(i)); ok {
+			data[key] = shared.NewHardwareValue(val, unit, valueType)
+		}
+	}
 
-	data[shared.GPUFrequency.Key] = shared.NewHardwareValue(parseFloatField(field(4)), shared.MHz, shared.Frequency)
-	data[shared.VRAMLrequency.Key] = shared.NewHardwareValue(parseFloatField(field(5)), shared.MHz, shared.Frequency)
-
-	data[shared.VRAMTotal.Key] = shared.NewHardwareValue(parseFloatField(field(6)), shared.Megabyte, shared.Memory)
-	data[shared.VRAMUsed.Key] = shared.NewHardwareValue(parseFloatField(field(7)), shared.Megabyte, shared.Memory)
-	data[shared.VRAMVendor.Key] = shared.NewHardwareValue(field(12), shared.UnknownUnit, shared.Unknown)
-
-	data[shared.GPUUsage.Key] = shared.NewHardwareValue(parseFloatField(field(8)), shared.Percent, shared.Usage)
-	data[shared.GPUPowerMax.Key] = shared.NewHardwareValue(parseFloatField(field(9)), shared.Watt, shared.Power)
-	data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(parseFloatField(field(10)), shared.Watt, shared.Power)
-	data[shared.FanSpeed.Key] = shared.NewHardwareValue(parseFloatField(field(11)), shared.RPM, shared.Unknown)
+	setNumeric(shared.GPUTemp.Key, 2, shared.Celsius, shared.Temperature)
+	setNumeric(shared.VRAMTemp.Key, 3, shared.Celsius, shared.Temperature)
+	setNumeric(shared.GPUFrequency.Key, 4, shared.MHz, shared.Frequency)
+	setNumeric(shared.VRAMLrequency.Key, 5, shared.MHz, shared.Frequency)
+	setNumeric(shared.VRAMTotal.Key, 6, shared.Megabyte, shared.Memory)
+	setNumeric(shared.VRAMUsed.Key, 7, shared.Megabyte, shared.Memory)
+	setNumeric(shared.GPUUsage.Key, 8, shared.Percent, shared.Usage)
+	setNumeric(shared.GPUPowerMax.Key, 9, shared.Watt, shared.Power)
+	setNumeric(shared.GPUPowerAvg.Key, 10, shared.Watt, shared.Power)
+	setNumeric(shared.FanSpeed.Key, 11, shared.RPM, shared.Unknown)
 
 	return shared.HardwareData{Name: name, Values: data, IsGPU: true}
 }
