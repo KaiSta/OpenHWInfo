@@ -7,6 +7,7 @@ import (
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
+	"github.com/KaiSta/OpenHWInfo/intel"
 	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
@@ -135,6 +136,8 @@ func main() {
 		var gpuData shared.HardwareData
 		if nvidia.Available() {
 			gpuData = nvidia.GetInformations()
+		} else if intel.Available() {
+			gpuData = intel.GetInformations()
 		} else {
 			gpuData = amd.GetInformations()
 		}
