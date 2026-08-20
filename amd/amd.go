@@ -3,9 +3,11 @@ package amd
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -62,13 +64,14 @@ func resolvePCIDevice(cardIndex int) string {
 	return parts[len(parts)-1]
 }
 
-// getGPUName returns a human-readable GPU name for the card at the given DRM
-// index, preferring a PCI-address-scoped lspci query so that multi-GPU systems
-// get the correct name per card.
+// getGPUName returns a human-readable chipset/product label for the card at the
+// given DRM index, preferring a PCI-address-scoped lspci query so that multi-GPU
+// systems get the correct name per card. The raw lspci line is reduced to just
+// the device portion (see cleanGPUName).
 func getGPUName(cardIndex int) string {
 	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
 		if line := strings.TrimSpace(runShell("lspci -s " + pciAddr)); line != "" {
-			return line
+			return cleanGPUName(line)
 		}
 	}
 	// Fallback: list all VGA/3D cards and pick by index.
@@ -80,23 +83,110 @@ func getGPUName(cardIndex int) string {
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if cardIndex < len(lines) {
-		return lines[cardIndex]
+		return cleanGPUName(lines[cardIndex])
 	}
 	return "AMD GPU"
+}
+
+// revSuffixRe matches the trailing revision tag that lspci appends to device
+// names, e.g. " (rev cc)".
+var revSuffixRe = regexp.MustCompile(`\s*\(rev\s+[0-9a-fA-F]+\)\s*$`)
+
+// vendorPrefixes are known AMD vendor prefixes stripped from lspci output so
+// that only the chipset/product name remains.
+var vendorPrefixes = []string{
+	"Advanced Micro Devices, Inc. [AMD/ATI] ",
+}
+
+// cleanGPUName reduces a raw lspci line to just the chipset/product portion,
+// dropping the PCI address, class label, vendor prefix and revision tag. For
+// example:
+//
+//	0c:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [...] (rev cc)
+//	  -> Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M]
+func cleanGPUName(raw string) string {
+	line := strings.TrimSpace(raw)
+	if line == "" {
+		return "AMD GPU"
+	}
+
+	// Drop the leading PCI address (first whitespace-delimited token).
+	if idx := strings.IndexByte(line, ' '); idx >= 0 {
+		line = line[idx+1:]
+	}
+
+	// Drop the class label up to the first ": " separator.
+	if idx := strings.Index(line, ": "); idx >= 0 {
+		line = line[idx+len(": "):]
+	}
+
+	// Strip a known vendor prefix if present.
+	for _, prefix := range vendorPrefixes {
+		line = strings.TrimPrefix(line, prefix)
+	}
+
+	// Remove the trailing "(rev xx)" tag.
+	line = revSuffixRe.ReplaceAllString(line, "")
+
+	return strings.TrimSpace(line)
+}
+
+// gpuVariant is one retail product that shares a chipset, identified by its
+// total VRAM size so siblings can be told apart at runtime.
+type gpuVariant struct {
+	name   string
+	vramMB float64 // expected total VRAM in MB; 0 means "any"
+}
+
+// chipsetVariants maps a cleaned chipset name to the retail products that use
+// it, ordered by preference. It is used to turn a generic chipset label such as
+// "Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M]" into a specific product name.
+var chipsetVariants = map[string][]gpuVariant{
+	"Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M]": {
+		{name: "Radeon RX 7900 XTX", vramMB: 24576}, // 24 GB
+		{name: "Radeon RX 7900 XT", vramMB: 20480},  // 20 GB
+	},
+}
+
+// disambiguateGPUName picks a specific retail product name for a chipset that
+// maps to several products, using the measured total VRAM as the tie-breaker.
+// If no confident match is found it returns the cleaned chipset name unchanged.
+func disambiguateGPUName(chipsetName string, vramMB float64) string {
+	variants := chipsetVariants[chipsetName]
+	if len(variants) == 0 || vramMB <= 0 {
+		return chipsetName
+	}
+
+	best := ""
+	bestDiff := -1.0
+	for _, v := range variants {
+		diff := math.Abs(v.vramMB - vramMB)
+		if bestDiff < 0 || diff < bestDiff {
+			best, bestDiff = v.name, diff
+		}
+	}
+
+	// Only trust the match if it is within a reasonable tolerance of the
+	// expected VRAM size; otherwise keep the generic chipset name.
+	const toleranceMB = 2048 // ~1 GB slack
+	if bestDiff <= float64(toleranceMB) {
+		return best
+	}
+	return chipsetName
 }
 
 // collectGPUDataForCard collects the hardware metrics available for a single
 // AMD GPU at the given card path.
 func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	data := make(map[string]shared.HardwareValue)
-	gpuName := getGPUName(cardIndex)
-	data[shared.GPUName.Key] = shared.NewHardwareValue(gpuName, shared.UnknownUnit, shared.Unknown)
+	chipsetName := getGPUName(cardIndex)
+	data[shared.GPUName.Key] = shared.NewHardwareValue(chipsetName, shared.UnknownUnit, shared.Unknown)
 
 	cardPath = filepath.Join(cardPath, "hwmon")
 	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found")
-		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
+		return shared.HardwareData{Name: chipsetName, Values: data, IsGPU: true}
 	}
 
 	devicePath := filepath.Join(hwmonPath, "device")
@@ -117,9 +207,15 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 		data[shared.VRAMLrequency.Key] = shared.NewHardwareValue(parseFrequencyValue(memFreq), shared.MHz, shared.Frequency)
 	}
 
-	data[shared.VRAMTotal.Key] = shared.NewHardwareValue(parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total")), shared.Megabyte, shared.Memory)
+	vramTotalMB := parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total"))
+	data[shared.VRAMTotal.Key] = shared.NewHardwareValue(vramTotalMB, shared.Megabyte, shared.Memory)
 	data[shared.VRAMUsed.Key] = shared.NewHardwareValue(parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used")), shared.Megabyte, shared.Memory)
 	data[shared.VRAMVendor.Key] = shared.NewHardwareValue(readSysValue(filepath.Join(devicePath, "mem_info_vram_vendor")), shared.UnknownUnit, shared.Unknown)
+
+	// Refine the generic chipset label into a specific product name using the
+	// measured VRAM size (e.g. Navi 31 -> Radeon RX 7900 XT vs XTX).
+	gpuName := disambiguateGPUName(chipsetName, vramTotalMB)
+	data[shared.GPUName.Key] = shared.NewHardwareValue(gpuName, shared.UnknownUnit, shared.Unknown)
 
 	data[shared.GPUUsage.Key] = shared.NewHardwareValue(parseGPUUsage(readSysValue(filepath.Join(devicePath, "gpu_busy_percent"))), shared.Percent, shared.Usage)
 	data[shared.GPUPowerMax.Key] = shared.NewHardwareValue(parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_cap_max")), 1000000), shared.Watt, shared.Power)

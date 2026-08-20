@@ -112,6 +112,55 @@ func TestGetInformationsWithAMDCard(t *testing.T) {
 	}
 }
 
+func TestCleanGPUName(t *testing.T) {
+	cases := []struct {
+		raw    string
+		expect string
+	}{
+		{
+			raw:    "0c:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M] (rev cc)",
+			expect: "Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M]",
+		},
+		{
+			raw:    "01:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Radeon RX 6800 (rev c2)",
+			expect: "Radeon RX 6800",
+		},
+		{
+			raw:    "",
+			expect: "AMD GPU",
+		},
+	}
+
+	for _, tc := range cases {
+		got := cleanGPUName(tc.raw)
+		if got != tc.expect {
+			t.Errorf("cleanGPUName(%q) = %q, want %q", tc.raw, got, tc.expect)
+		}
+	}
+}
+
+func TestDisambiguateGPUName(t *testing.T) {
+	const navi31 = "Navi 31 [Radeon RX 7900 XT/7900 XTX/7900M]"
+
+	cases := []struct {
+		chipset string
+		vramMB  float64
+		expect  string
+	}{
+		{navi31, 20480, "Radeon RX 7900 XT"},          // 20 GB -> XT
+		{navi31, 24576, "Radeon RX 7900 XTX"},         // 24 GB -> XTX
+		{navi31, 0, navi31},                           // no VRAM info -> keep chipset name
+		{"Unknown chipset", 20480, "Unknown chipset"}, // unmapped chipset unchanged
+	}
+
+	for _, tc := range cases {
+		got := disambiguateGPUName(tc.chipset, tc.vramMB)
+		if got != tc.expect {
+			t.Errorf("disambiguateGPUName(%q, %v) = %q, want %q", tc.chipset, tc.vramMB, got, tc.expect)
+		}
+	}
+}
+
 func TestGetAllInformationsMultipleCards(t *testing.T) {
 	// Create a temporary directory to mock /sys
 	tempDir := t.TempDir()
