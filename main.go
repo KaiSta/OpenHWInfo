@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
+	"embed"
 	"fmt"
-	"html/template"
-	"net/http"
 	"strings"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
@@ -11,9 +11,18 @@ import (
 	"github.com/KaiSta/OpenHWInfo/intel"
 	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/KaiSta/OpenHWInfo/shared"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	assetserver "github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
-// GPUView holds the data for a single GPU in the template.
+// assets embeds the frontend (website/) so production builds are fully
+// self-contained and do not depend on files next to the binary.
+//
+//go:embed all:website
+var assets embed.FS
+
+// GPUView holds the data for a single GPU in the frontend.
 type GPUView struct {
 	Name      string
 	Keys      []shared.KeyTemplate
@@ -76,10 +85,130 @@ func gpuHistoryKey(gpuIndex int, metricKey string) string {
 var cpuHistory = make(map[string][]float64)
 var gpuHistory = make(map[string][]float64)
 
-var templateCache *template.Template
+// App is the main application struct.
+type App struct {
+	ctx context.Context
+}
 
-func init() {
-	templateCache = template.Must(template.ParseGlob("website/*.html"))
+// NewApp creates a new App instance.
+func NewApp() *App {
+	return &App{}
+}
+
+// startup is run at app startup. It sets the ctx for later use.
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+// shutdown is run at app exit.
+func (a *App) shutdown(_ context.Context) {
+	fmt.Println("Shutting down")
+}
+
+// GetData collects current CPU and GPU data, updates the min/max history and
+// returns a snapshot for the frontend to render.
+func (a *App) GetData() Data {
+	// Collect CPU data
+	cpuData := cpuinfo.GetInformations()
+
+	// Collect GPU data from all available sources
+	var allGPUs []shared.HardwareData
+	usedGPU := false
+
+	if nvidia.Available() {
+		allGPUs = nvidia.GetAllInformations()
+		usedGPU = true
+	}
+	if intel.Available() {
+		allGPUs = append(allGPUs, intel.GetAllInformations()...)
+		usedGPU = true
+	}
+	if amd.Available() {
+		allGPUs = append(allGPUs, amd.GetAllInformations()...)
+		usedGPU = true
+	}
+
+	// If no GPU was found, add a placeholder
+	if !usedGPU {
+		allGPUs = append(allGPUs, shared.HardwareData{Name: "No GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true})
+	}
+
+	// Build per-GPU view data
+	var gpuViews []GPUView
+	for gpuIdx, gpuData := range allGPUs {
+		// Filter keys to only show those with available values
+		var filteredKeys []shared.KeyTemplate
+		for _, key := range gpuTemplates {
+			if value, exists := gpuData.Values[key.Key]; exists && value.Value != "" {
+				filteredKeys = append(filteredKeys, key)
+			}
+		}
+
+		// Build string values map
+		stringValues := make(map[string]string)
+		for key, value := range gpuData.Values {
+			stringValues[key] = formatValue(value)
+		}
+
+		// Build a subset of values that use prefixed keys for per-GPU history tracking.
+		prefixedValues := make(map[string]shared.HardwareValue)
+		for k, v := range gpuData.Values {
+			if v.IsNumericType() {
+				prefixedKey := gpuHistoryKey(gpuIdx, k)
+				prefixedValues[prefixedKey] = v
+			}
+		}
+
+		// Calculate min/max using prefixed history keys (so each GPU's
+		// history is tracked independently), then remap them back to the
+		// plain metric keys that the frontend uses for lookups.
+		minValues, maxValues := updateHistoryAndCalculateMinMax(gpuHistory, prefixedValues)
+
+		remap := func(src map[string]string) map[string]string {
+			dst := make(map[string]string, len(src))
+			for k, v := range src {
+				if strings.HasPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".") {
+					dst[strings.TrimPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".")] = v
+				}
+			}
+			return dst
+		}
+		minValues = remap(minValues)
+		maxValues = remap(maxValues)
+
+		gpuViews = append(gpuViews, GPUView{
+			Name:      gpuData.Name,
+			Keys:      filteredKeys,
+			Values:    stringValues,
+			MinValues: minValues,
+			MaxValues: maxValues,
+		})
+	}
+
+	// Filter CPU keys to only show those with available values
+	var filteredCpuKeys []shared.KeyTemplate
+	for _, key := range cpuTemplates {
+		if value, exists := cpuData.Values[key.Key]; exists && value.Value != "" {
+			filteredCpuKeys = append(filteredCpuKeys, key)
+		}
+	}
+
+	// Create a map of string values for display purposes
+	cpuStringValues := make(map[string]string)
+	for key, value := range cpuData.Values {
+		cpuStringValues[key] = formatValue(value)
+	}
+
+	// Update history and calculate min/max values for CPU
+	cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuData.Values)
+
+	return Data{
+		CpuKeys:      filteredCpuKeys,
+		GpuViews:     gpuViews,
+		CpuValues:    cpuStringValues,
+		CpuMinValues: cpuMinValues,
+		CpuMaxValues: cpuMaxValues,
+	}
 }
 
 // updateHistoryAndCalculateMinMax updates the history of values and calculates min/max
@@ -155,121 +284,24 @@ func formatValue(value shared.HardwareValue) string {
 }
 
 func main() {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Collect CPU data
-		cpuData := cpuinfo.GetInformations()
+	app := NewApp()
 
-		// Collect GPU data from all available sources
-		var allGPUs []shared.HardwareData
-		usedGPU := false
-
-		if nvidia.Available() {
-			allGPUs = nvidia.GetAllInformations()
-			usedGPU = true
-		}
-		if intel.Available() {
-			allGPUs = append(allGPUs, intel.GetAllInformations()...)
-			usedGPU = true
-		}
-		if amd.Available() {
-			allGPUs = append(allGPUs, amd.GetAllInformations()...)
-			usedGPU = true
-		}
-
-		// If no GPU was found, add a placeholder
-		if !usedGPU {
-			allGPUs = append(allGPUs, shared.HardwareData{Name: "No GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true})
-		}
-
-		// Build per-GPU view data
-		var gpuViews []GPUView
-		for gpuIdx, gpuData := range allGPUs {
-			// Filter keys to only show those with available values
-			var filteredKeys []shared.KeyTemplate
-			for _, key := range gpuTemplates {
-				if value, exists := gpuData.Values[key.Key]; exists && value.Value != "" {
-					filteredKeys = append(filteredKeys, key)
-				}
-			}
-
-			// Build string values map
-			stringValues := make(map[string]string)
-			for key, value := range gpuData.Values {
-				stringValues[key] = formatValue(value)
-			}
-
-			// Build a subset of values that use prefixed keys for per-GPU history tracking.
-			prefixedValues := make(map[string]shared.HardwareValue)
-			for k, v := range gpuData.Values {
-				if v.IsNumericType() {
-					prefixedKey := gpuHistoryKey(gpuIdx, k)
-					prefixedValues[prefixedKey] = v
-				}
-			}
-
-			// Calculate min/max using prefixed history keys (so each GPU's
-			// history is tracked independently), then remap them back to the
-			// plain metric keys that the template uses for lookups.
-			minValues, maxValues := updateHistoryAndCalculateMinMax(gpuHistory, prefixedValues)
-
-			remap := func(src map[string]string) map[string]string {
-				dst := make(map[string]string, len(src))
-				for k, v := range src {
-					if strings.HasPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".") {
-						dst[strings.TrimPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".")] = v
-					}
-				}
-				return dst
-			}
-			minValues = remap(minValues)
-			maxValues = remap(maxValues)
-
-			gpuViews = append(gpuViews, GPUView{
-				Name:      gpuData.Name,
-				Keys:      filteredKeys,
-				Values:    stringValues,
-				MinValues: minValues,
-				MaxValues: maxValues,
-			})
-		}
-
-		// Filter CPU keys to only show those with available values
-		var filteredCpuKeys []shared.KeyTemplate
-		for _, key := range cpuTemplates {
-			if value, exists := cpuData.Values[key.Key]; exists && value.Value != "" {
-				filteredCpuKeys = append(filteredCpuKeys, key)
-			}
-		}
-
-		// Create a map of string values for display purposes
-		cpuStringValues := make(map[string]string)
-		for key, value := range cpuData.Values {
-			cpuStringValues[key] = formatValue(value)
-		}
-
-		// Update history and calculate min/max values for CPU
-		cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuData.Values)
-
-		data := Data{
-			CpuKeys:      filteredCpuKeys,
-			GpuViews:     gpuViews,
-			CpuValues:    cpuStringValues,
-			CpuMinValues: cpuMinValues,
-			CpuMaxValues: cpuMaxValues,
-		}
-
-		err := templateCache.ExecuteTemplate(w, "index.html", data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
+	err := wails.Run(&options.App{
+		Title:            "OpenHWInfo — Hardware Monitor",
+		Width:            1180,
+		Height:           760,
+		MinWidth:         560,
+		MinHeight:        400,
+		StartHidden:      false,
+		BackgroundColour: options.NewRGB(11, 15, 23), // #0b0f17
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
+		Bind:       []interface{}{app},
 	})
-
-	fs := http.FileServer(http.Dir("website/resources"))
-	http.Handle("/resources/", http.StripPrefix("/resources/", fs))
-
-	fmt.Println("Starting server at port 8080")
-	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
-		panic(err)
+		println("error:", err.Error())
 	}
 }

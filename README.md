@@ -1,5 +1,25 @@
 # OpenHWInfo
 
+A native desktop hardware monitor (CPU + GPU) built with [Wails](https://wails.io). The Go backend collects live sensor data and the embedded webview renders it, refreshing every 5 seconds.
+
+## Build & Run
+
+### Linux (WebKitGTK 4.1)
+
+Prerequisites: `sudo apt install libwebkit2gtk-4.1-dev build-essential`
+
+```bash
+make run        # builds + runs the native app
+make build      # just builds → ./OpenHWInfo
+make dev        # development mode with hot-reload (serves frontend from disk)
+make test       # run all tests
+make clean      # remove binary
+```
+
+The `production` tag is required for Wails to create the native window; `webkit2_41` selects WebKitGTK 4.1 (use `libwebkit2gtk-4.0-dev` and drop this tag on older distros). The frontend in `website/` is embedded into the binary, so a single self-contained executable is produced.
+
+> **Note:** Running `go build .` without tags will fail with "Wails applications will not build without the correct build tags." Always use `make build` or add `-tags=production,webkit2_41`.
+
 ## CPU Infos
 
 `/proc/cpuinfo`

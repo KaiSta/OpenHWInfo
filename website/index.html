@@ -203,161 +203,183 @@
             <span class="refresh-note"><span class="dot"></span> Auto-refresh · 5s</span>
         </header>
 
-        <main class="grid">
-            <!-- CPU card -->
-            <section class="card" id="cpu-card">
-                <div class="card-head">
-                    <img src="/resources/cpu.jpeg" alt="CPU Icon">
-                    <div>
-                        <div class="card-title">CPU</div>
-                        <div class="card-sub">{{index .CpuValues "cpu.brand"}} · {{len .CpuKeys}} metrics</div>
-                    </div>
-                </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Metric</th>
-                            <th>Current</th>
-                            <th>Min</th>
-                            <th>Max</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{range .CpuKeys}}
-                        <tr data-key="{{.Key}}" data-label="{{.Label}}">
-                            <td class="label-cell">{{.Label}}</td>
-                            <td class="value-cell" data-value>{{index $.CpuValues .Key}}</td>
-                            <td class="minmax" data-min>{{index $.CpuMinValues .Key}}</td>
-                            <td class="minmax" data-max>{{index $.CpuMaxValues .Key}}</td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-            </section>
-
-            <!-- GPU cards -->
-            {{range .GpuViews}}
-            {{ $gpu := . }}
-            <section class="card">
-                <div class="card-head">
-                    <img src="/resources/gpu.jpg" alt="GPU Icon">
-                    <div>
-                        <div class="card-title">{{ $gpu.Name }}</div>
-                        <div class="card-sub">GPU · {{len $gpu.Keys}} metrics</div>
-                    </div>
-                </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Metric</th>
-                            <th>Current</th>
-                            <th>Min</th>
-                            <th>Max</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{range $gpu.Keys}}
-                        <tr data-key="{{.Key}}" data-label="{{.Label}}">
-                            <td class="label-cell">{{.Label}}</td>
-                            <td class="value-cell" data-value>{{index $gpu.Values .Key}}</td>
-                            <td class="minmax" data-min>{{index $gpu.MinValues .Key}}</td>
-                            <td class="minmax" data-max>{{index $gpu.MaxValues .Key}}</td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-            </section>
-            {{end}}
-        </main>
+        <main class="grid" id="cards"></main>
 
         <footer class="note">Data is collected locally on this host. Values refresh automatically every 5 seconds.</footer>
     </div>
 
     <script>
-        // Add progress bars for numeric metrics that have a meaningful scale.
-        (function () {
-            function num(v) {
-                if (!v) return null;
-                var n = parseFloat(String(v).replace(",", "."));
-                return isNaN(n) ? null : n;
-            }
+        // ---- Helpers -------------------------------------------------------
+        function num(v) {
+            if (v === null || v === undefined) return null;
+            var n = parseFloat(String(v).replace(",", "."));
+            return isNaN(n) ? null : n;
+        }
 
-            // Decide a 0..1 fraction + color class for a given metric row.
-            function gauge(row, cardRows) {
-                var key = row.getAttribute("data-key") || "";
-                var val = num(row.querySelector("[data-value]").textContent);
-                if (val === null) return null;
+        function frac(v, max) {
+            if (!max || max <= 0) return null;
+            var f = Math.max(0, Math.min(1, v / max));
+            var cls = "good";
+            if (f > 0.85) cls = "bad";
+            else if (f > 0.6) cls = "warn";
+            return { pct: Math.round(f * 100), cls: cls };
+        }
 
-                // Percentages and temperatures share a 0..100 scale.
-                if (/usage|percent/i.test(key)) {
-                    return frac(val, 100);
-                }
-                if (/temp/i.test(key)) {
-                    return frac(val, 100);
-                }
+        // Decide a 0..1 fraction + color class for a metric, using the card's
+        // full value map so sibling metrics (e.g. vram.total) are available.
+        function gauge(key, valStr, values) {
+            var val = num(valStr);
+            if (val === null) return null;
 
-                // Power: use the reported max as the ceiling when available.
-                if (/power/i.test(key)) {
-                    var max = num(row.querySelector("[data-max]").textContent) || val;
-                    if (max > 0 && key.indexOf("avg") !== -1) return frac(val, max);
-                    return null;
-                }
+            if (/usage|percent/i.test(key)) return frac(val, 100);
+            if (/temp/i.test(key)) return frac(val, 100);
 
-                // VRAM used: fraction of total within the same card.
-                if (/vram\.used/i.test(key)) {
-                    var total = findValue(cardRows, "vram.total");
-                    if (total && total > 0) return frac(val, total);
-                }
-
+            if (/power/i.test(key)) {
+                var max = num(values["gpu.power.max"]) || val;
+                if (max > 0 && key.indexOf("avg") !== -1) return frac(val, max);
                 return null;
             }
 
-            function frac(v, max) {
-                if (!max || max <= 0) return null;
-                var f = Math.max(0, Math.min(1, v / max));
-                var cls = "good";
-                if (f > 0.85) cls = "bad";
-                else if (f > 0.6) cls = "warn";
-                return { pct: Math.round(f * 100), cls: cls };
+            if (/vram\.used/i.test(key)) {
+                var total = num(values["vram.total"]);
+                if (total && total > 0) return frac(val, total);
             }
 
-            function findValue(rows, key) {
-                for (var i = 0; i < rows.length; i++) {
-                    if ((rows[i].getAttribute("data-key") || "") === key) {
-                        return num(rows[i].querySelector("[data-value]").textContent);
-                    }
+            return null;
+        }
+
+        // ---- Rendering -----------------------------------------------------
+        function buildCard(iconSrc, title, subtitle, keys, values, minValues, maxValues) {
+            var section = document.createElement("section");
+            section.className = "card";
+
+            var head = document.createElement("div");
+            head.className = "card-head";
+            var img = document.createElement("img");
+            img.src = iconSrc;
+            img.alt = title + " Icon";
+            var headText = document.createElement("div");
+            headText.innerHTML = '<div class="card-title"></div><div class="card-sub"></div>';
+            headText.querySelector(".card-title").textContent = title;
+            headText.querySelector(".card-sub").textContent = subtitle;
+            head.appendChild(img);
+            head.appendChild(headText);
+
+            var table = document.createElement("table");
+            var thead = document.createElement("thead");
+            thead.innerHTML = "<tr><th>Metric</th><th>Current</th><th>Min</th><th>Max</th></tr>";
+            var tbody = document.createElement("tbody");
+
+            keys.forEach(function (k) {
+                var key = k.Key;
+                var tr = document.createElement("tr");
+                tr.setAttribute("data-key", key);
+
+                var tdLabel = document.createElement("td");
+                tdLabel.className = "label-cell";
+                tdLabel.textContent = k.Label;
+
+                var tdValue = document.createElement("td");
+                tdValue.className = "value-cell";
+                tdValue.setAttribute("data-value", "");
+                tdValue.textContent = values[key] !== undefined ? values[key] : "";
+
+                var tdMin = document.createElement("td");
+                tdMin.className = "minmax";
+                tdMin.setAttribute("data-min", "");
+                tdMin.textContent = minValues && minValues[key] !== undefined ? minValues[key] : "";
+
+                var tdMax = document.createElement("td");
+                tdMax.className = "minmax";
+                tdMax.setAttribute("data-max", "");
+                tdMax.textContent = maxValues && maxValues[key] !== undefined ? maxValues[key] : "";
+
+                tr.appendChild(tdLabel);
+                tr.appendChild(tdValue);
+                tr.appendChild(tdMin);
+                tr.appendChild(tdMax);
+                tbody.appendChild(tr);
+
+                // Progress bar for metrics with a meaningful scale.
+                var g = gauge(key, values[key], values);
+                if (g) {
+                    var wrap = document.createElement("div");
+                    wrap.className = "bar-wrap";
+                    var bar = document.createElement("div");
+                    bar.className = "bar " + g.cls;
+                    bar.style.width = g.pct + "%";
+                    wrap.appendChild(bar);
+                    tdValue.appendChild(wrap);
                 }
-                return null;
+            });
+
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            section.appendChild(head);
+            section.appendChild(table);
+            return section;
+        }
+
+        function render(data) {
+            var grid = document.getElementById("cards");
+            grid.innerHTML = "";
+
+            // CPU card.
+            var cpuBrand = data.CpuValues && data.CpuValues["cpu.brand"] ? data.CpuValues["cpu.brand"] : "CPU";
+            grid.appendChild(buildCard(
+                "/resources/cpu.jpeg",
+                "CPU",
+                cpuBrand + " · " + (data.CpuKeys ? data.CpuKeys.length : 0) + " metrics",
+                data.CpuKeys || [],
+                data.CpuValues || {},
+                data.CpuMinValues || {},
+                data.CpuMaxValues || {}
+            ));
+
+            // GPU cards.
+            (data.GpuViews || []).forEach(function (gpu) {
+                grid.appendChild(buildCard(
+                    "/resources/gpu.jpg",
+                    gpu.Name,
+                    "GPU · " + (gpu.Keys ? gpu.Keys.length : 0) + " metrics",
+                    gpu.Keys || [],
+                    gpu.Values || {},
+                    gpu.MinValues || {},
+                    gpu.MaxValues || {}
+                ));
+            });
+        }
+
+        // ---- Polling loop --------------------------------------------------
+        // Wails v2 exposes bound methods under window.go.<package>.<StructName>.<Method>()
+        function getData() {
+            if (window.go && window.go.main && window.go.main.App) {
+                return window.go.main.App.GetData();
             }
-
-            function render() {
-                var cards = document.querySelectorAll(".card");
-                for (var c = 0; c < cards.length; c++) {
-                    var rows = Array.prototype.slice.call(cards[c].querySelectorAll("tbody tr"));
-                    for (var i = 0; i < rows.length; i++) {
-                        // Remove any previous bar so re-renders stay clean.
-                        var old = rows[i].querySelector(".bar-wrap");
-                        if (old) old.remove();
-
-                        var g = gauge(rows[i], rows);
-                        if (!g) continue;
-
-                        var wrap = document.createElement("div");
-                        wrap.className = "bar-wrap";
-                        var bar = document.createElement("div");
-                        bar.className = "bar " + g.cls;
-                        bar.style.width = g.pct + "%";
-                        wrap.appendChild(bar);
-                        rows[i].querySelector("[data-value]").appendChild(wrap);
-                    }
-                }
+            // Fallback for older/alternate binding layouts.
+            if (window.goApp && window.goApp.GetData) {
+                return window.goApp.GetData();
             }
+            throw new Error("Wails bindings not ready yet");
+        }
 
-            render();
-        })();
+        function tick() {
+            try {
+                getData().then(function (data) {
+                    render(data);
+                }).catch(function (err) {
+                    console.error("GetData failed:", err);
+                });
+            } catch (e) {
+                // Bindings may not be ready on the very first tick; retry shortly.
+                console.warn(e.message || e);
+                setTimeout(tick, 500);
+            }
+        }
 
-        // Auto refresh.
-        setTimeout(function () { window.location.reload(); }, 5000);
+        // Initial load + refresh every 5 seconds.
+        tick();
+        setInterval(tick, 5000);
     </script>
 </body>
 </html>
