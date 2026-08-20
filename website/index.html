@@ -2,88 +2,362 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>CPU and GPU Information</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenHWInfo — Hardware Monitor</title>
     <style>
+        :root {
+            --bg: #0b0f17;
+            --surface: #121826;
+            --surface-2: #1a2234;
+            --border: #232d42;
+            --text: #e6ebf5;
+            --muted: #9aa6c0;
+            --accent: #4f8cff;
+            --accent-2: #7c5cff;
+            --good: #2fd17a;
+            --warn: #ffb020;
+            --bad: #ff5d6c;
+        }
+
+        * { box-sizing: border-box; }
+
         body {
-            font-family: Arial, sans-serif;
+            margin: 0;
+            font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+            background: radial-gradient(1200px 600px at 80% -10%, #14203a 0%, var(--bg) 55%) fixed, var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .wrap {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 28px 20px 60px;
+        }
+
+        header.top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo {
+            width: 46px;
+            height: 46px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-2));
+            display: grid;
+            place-items: center;
+            font-size: 24px;
+            box-shadow: 0 8px 24px rgba(79, 140, 255, 0.35);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 26px;
+            letter-spacing: 0.2px;
+        }
+
+        .subtitle {
+            color: var(--muted);
+            font-size: 14px;
+            margin-top: 3px;
+        }
+
+        .refresh-note {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--muted);
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--good);
+            box-shadow: 0 0 0 0 rgba(47, 209, 122, 0.6);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(47, 209, 122, 0.5); }
+            70% { box-shadow: 0 0 0 8px rgba(47, 209, 122, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(47, 209, 122, 0); }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: linear-gradient(180deg, var(--surface) 0%, #0f1522 100%);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35);
+        }
+
+        .card-head {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .card-head img {
+            width: 40px;
+            height: 40px;
+            object-fit: cover;
+            border-radius: 10px;
+            background: var(--surface-2);
+        }
+
+        .card-title {
+            font-size: 17px;
+            font-weight: 600;
+        }
+
+        .card-sub {
+            color: var(--muted);
+            font-size: 13px;
+            margin-top: 2px;
         }
 
         table {
-            border-collapse: collapse;
             width: 100%;
-            margin-top: 20px;
+            border-collapse: collapse;
         }
 
         th, td {
-            border: 1px solid black;
-            padding: 15px;
+            padding: 12px 18px;
             text-align: left;
-            font-size: 16px;
-        }
-
-        tr:nth-child(even) {
-            background-color: #f2f2f2;
+            font-size: 14px;
+            border-bottom: 1px solid rgba(35, 45, 66, 0.6);
         }
 
         th {
-            background-color: #4CAF50;
-            color: white;
+            color: var(--muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.4px;
+            background: rgba(255, 255, 255, 0.02);
         }
 
-        h2 {
-            margin-top: 30px;
+        tbody tr:last-child td { border-bottom: none; }
+
+        tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
+
+        .label-cell { color: var(--text); font-weight: 500; }
+        .value-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
+        .minmax { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+        /* Progress bar under a value */
+        .bar-wrap { margin-top: 8px; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+        .bar { height: 100%; border-radius: 999px; width: 0%; transition: width 0.4s ease; }
+        .bar.good { background: linear-gradient(90deg, #2fd17a, #58e0a0); }
+        .bar.warn { background: linear-gradient(90deg, #ffb020, #ffd35c); }
+        .bar.bad  { background: linear-gradient(90deg, #ff5d6c, #ff8a97); }
+
+        footer.note {
+            margin-top: 28px;
+            color: var(--muted);
+            font-size: 13px;
+            text-align: center;
         }
 
-        h3 {
-            margin-bottom: 10px;
+        @media (max-width: 560px) {
+            header.top { flex-direction: column; align-items: flex-start; }
+            .grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <h2>CPU Information</h2>
-    <img src="/resources/cpu.jpeg" alt="CPU Icon" width="64" height="64">
-    <table>
-        <tr>
-            <th>Element</th>
-            <th>Current Value</th>
-            <th>Min Value</th>
-            <th>Max Value</th>
-        </tr>
-        {{range .CpuKeys}}
-            <tr>
-                <td>{{.Label}}</td>
-                <td>{{index $.CpuValues .Key}}</td>
-                <td>{{index $.CpuMinValues .Key}}</td>
-                <td>{{index $.CpuMaxValues .Key}}</td>
-            </tr>
-        {{end}}
-    </table>
-    <h2>GPU Information</h2>
-    {{range .GpuViews}}
-    {{ $gpu := . }}
-    <h3>{{ $gpu.Name }}</h3>
-    <img src="/resources/gpu.jpg" alt="GPU Icon" width="64" height="64">
-    <table>
-        <tr>
-            <th>Element</th>
-            <th>Current Value</th>
-            <th>Min Value</th>
-            <th>Max Value</th>
-        </tr>
-        {{range $gpu.Keys}}
-            <tr>
-                <td>{{.Label}}</td>
-                <td>{{index $gpu.Values .Key}}</td>
-                <td>{{index $gpu.MinValues .Key}}</td>
-                <td>{{index $gpu.MaxValues .Key}}</td>
-            </tr>
-        {{end}}
-    </table>
-    {{end}}
+    <div class="wrap">
+        <header class="top">
+            <div class="brand">
+                <div class="logo">⚙️</div>
+                <div>
+                    <h1>OpenHWInfo</h1>
+                    <div class="subtitle">Live CPU & GPU hardware monitor</div>
+                </div>
+            </div>
+            <span class="refresh-note"><span class="dot"></span> Auto-refresh · 5s</span>
+        </header>
+
+        <main class="grid">
+            <!-- CPU card -->
+            <section class="card" id="cpu-card">
+                <div class="card-head">
+                    <img src="/resources/cpu.jpeg" alt="CPU Icon">
+                    <div>
+                        <div class="card-title">CPU</div>
+                        <div class="card-sub">{{index .CpuValues "cpu.brand"}} · {{len .CpuKeys}} metrics</div>
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Metric</th>
+                            <th>Current</th>
+                            <th>Min</th>
+                            <th>Max</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .CpuKeys}}
+                        <tr data-key="{{.Key}}" data-label="{{.Label}}">
+                            <td class="label-cell">{{.Label}}</td>
+                            <td class="value-cell" data-value>{{index $.CpuValues .Key}}</td>
+                            <td class="minmax" data-min>{{index $.CpuMinValues .Key}}</td>
+                            <td class="minmax" data-max>{{index $.CpuMaxValues .Key}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- GPU cards -->
+            {{range .GpuViews}}
+            {{ $gpu := . }}
+            <section class="card">
+                <div class="card-head">
+                    <img src="/resources/gpu.jpg" alt="GPU Icon">
+                    <div>
+                        <div class="card-title">{{ $gpu.Name }}</div>
+                        <div class="card-sub">GPU · {{len $gpu.Keys}} metrics</div>
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Metric</th>
+                            <th>Current</th>
+                            <th>Min</th>
+                            <th>Max</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range $gpu.Keys}}
+                        <tr data-key="{{.Key}}" data-label="{{.Label}}">
+                            <td class="label-cell">{{.Label}}</td>
+                            <td class="value-cell" data-value>{{index $gpu.Values .Key}}</td>
+                            <td class="minmax" data-min>{{index $gpu.MinValues .Key}}</td>
+                            <td class="minmax" data-max>{{index $gpu.MaxValues .Key}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </section>
+            {{end}}
+        </main>
+
+        <footer class="note">Data is collected locally on this host. Values refresh automatically every 5 seconds.</footer>
+    </div>
+
     <script>
-        setTimeout(function() {
-            window.location.reload();
-        }, 5000);
+        // Add progress bars for numeric metrics that have a meaningful scale.
+        (function () {
+            function num(v) {
+                if (!v) return null;
+                var n = parseFloat(String(v).replace(",", "."));
+                return isNaN(n) ? null : n;
+            }
+
+            // Decide a 0..1 fraction + color class for a given metric row.
+            function gauge(row, cardRows) {
+                var key = row.getAttribute("data-key") || "";
+                var val = num(row.querySelector("[data-value]").textContent);
+                if (val === null) return null;
+
+                // Percentages and temperatures share a 0..100 scale.
+                if (/usage|percent/i.test(key)) {
+                    return frac(val, 100);
+                }
+                if (/temp/i.test(key)) {
+                    return frac(val, 100);
+                }
+
+                // Power: use the reported max as the ceiling when available.
+                if (/power/i.test(key)) {
+                    var max = num(row.querySelector("[data-max]").textContent) || val;
+                    if (max > 0 && key.indexOf("avg") !== -1) return frac(val, max);
+                    return null;
+                }
+
+                // VRAM used: fraction of total within the same card.
+                if (/vram\.used/i.test(key)) {
+                    var total = findValue(cardRows, "vram.total");
+                    if (total && total > 0) return frac(val, total);
+                }
+
+                return null;
+            }
+
+            function frac(v, max) {
+                if (!max || max <= 0) return null;
+                var f = Math.max(0, Math.min(1, v / max));
+                var cls = "good";
+                if (f > 0.85) cls = "bad";
+                else if (f > 0.6) cls = "warn";
+                return { pct: Math.round(f * 100), cls: cls };
+            }
+
+            function findValue(rows, key) {
+                for (var i = 0; i < rows.length; i++) {
+                    if ((rows[i].getAttribute("data-key") || "") === key) {
+                        return num(rows[i].querySelector("[data-value]").textContent);
+                    }
+                }
+                return null;
+            }
+
+            function render() {
+                var cards = document.querySelectorAll(".card");
+                for (var c = 0; c < cards.length; c++) {
+                    var rows = Array.prototype.slice.call(cards[c].querySelectorAll("tbody tr"));
+                    for (var i = 0; i < rows.length; i++) {
+                        // Remove any previous bar so re-renders stay clean.
+                        var old = rows[i].querySelector(".bar-wrap");
+                        if (old) old.remove();
+
+                        var g = gauge(rows[i], rows);
+                        if (!g) continue;
+
+                        var wrap = document.createElement("div");
+                        wrap.className = "bar-wrap";
+                        var bar = document.createElement("div");
+                        bar.className = "bar " + g.cls;
+                        bar.style.width = g.pct + "%";
+                        wrap.appendChild(bar);
+                        rows[i].querySelector("[data-value]").appendChild(wrap);
+                    }
+                }
+            }
+
+            render();
+        })();
+
+        // Auto refresh.
+        setTimeout(function () { window.location.reload(); }, 5000);
     </script>
 </body>
 </html>
