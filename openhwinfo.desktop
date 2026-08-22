@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenHWInfo
+Comment=Live CPU & GPU hardware monitor
+Exec=@EXEC@
+Icon=openhwinfo
+StartupWMClass=openhwinfo
+Terminal=false
+Categories=System;Monitor;

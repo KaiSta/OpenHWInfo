@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	assetserver "github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 )
 
 // assets embeds the frontend (website/) so production builds are fully
@@ -21,6 +22,11 @@ import (
 //
 //go:embed all:website
 var assets embed.FS
+
+// appIcon is the window/panel icon, embedded so it ships inside the binary.
+//
+//go:embed icons/icon-512.png
+var appIcon []byte
 
 // GPUView holds the data for a single GPU in the frontend.
 type GPUView struct {
@@ -300,6 +306,15 @@ func main() {
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
 		Bind:       []interface{}{app},
+		Linux: &linux.Options{
+			Icon: appIcon,
+			// Deterministic WM_CLASS so Cinnamon/GNOME can match this window to
+			// the openhwinfo.desktop entry (which carries the panel/taskbar icon).
+			ProgramName: "openhwinfo",
+			// Keep Wails' default GPU policy; setting Linux options otherwise
+			// changes the default — see wails#2977.
+			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
+		},
 	})
 	if err != nil {
 		println("error:", err.Error())

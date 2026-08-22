@@ -327,7 +327,7 @@
             // CPU card.
             var cpuBrand = data.CpuValues && data.CpuValues["cpu.brand"] ? data.CpuValues["cpu.brand"] : "CPU";
             grid.appendChild(buildCard(
-                "/resources/cpu.jpeg",
+                "/resources/cpu.png",
                 "CPU",
                 cpuBrand + " · " + (data.CpuKeys ? data.CpuKeys.length : 0) + " metrics",
                 data.CpuKeys || [],
@@ -339,7 +339,7 @@
             // GPU cards.
             (data.GpuViews || []).forEach(function (gpu) {
                 grid.appendChild(buildCard(
-                    "/resources/gpu.jpg",
+                    "/resources/gpu.png",
                     gpu.Name,
                     "GPU · " + (gpu.Keys ? gpu.Keys.length : 0) + " metrics",
                     gpu.Keys || [],
