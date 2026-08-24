@@ -55,173 +55,189 @@ func resolvePCIDevice(cardIndex int) string {
 	return parts[len(parts)-1]
 }
 
+// getPCIDeviceID reads the PCI device ID (e.g. "0416") of the Intel GPU at the
+// given DRM index directly from sysfs. This is more reliable than parsing lspci
+// output because it does not depend on the pci.ids database being installed.
+func getPCIDeviceID(cardIndex int) string {
+	id, ok := readSysFile(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex), "device"))
+	if !ok {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimPrefix(id, "0x"))
+}
+
 // getGPUName returns a human readable name for the Intel GPU at the given DRM
 // index, preferring a PCI-address-scoped lspci query so that multi-GPU systems
-// get the correct name per card. Falls back to glxinfo which provides specific
-// model names like "Intel(R) UHD Graphics 770" or "Intel(R) HD Graphics 4600",
-// then falls through multiple lspci patterns to extract specific Intel GPU identifiers.
-// Handles integrated graphics (i915 driver, no separate DRM device path).
+// get the correct name per card. The PCI device ID is read from sysfs (and/or
+// parsed from the "[8086:xxxx]" marker in the lspci line) and mapped to a
+// specific model name like "Intel HD Graphics 4600". Falls back to glxinfo,
+// which provides renderer strings like "Intel(R) UHD Graphics 770", then to a
+// cleaned-up lspci device name. Handles integrated graphics (i915 driver).
 func getGPUName(cardIndex int) string {
-	// Method 1: Direct PCI address query - most reliable for multi-GPU systems
+	deviceID := getPCIDeviceID(cardIndex)
+
+	// Method 1: Direct PCI address query - most reliable for multi-GPU systems.
+	// "-n" includes the 8086:xxxx device ID so it can be mapped to a model name.
 	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
-		line := strings.TrimSpace(runShell("lspci -s " + pciAddr))
-		if line != "" && strings.Contains(strings.ToLower(line), "intel") {
-			return parseIntelGPUName(line)
+		line := strings.TrimSpace(runShell("lspci -s " + pciAddr + " -n"))
+		// The card index was verified as Intel (vendor 0x8086) by probeIntel, and
+		// "-n" output may contain only IDs without the word "Intel", so match on
+		// the vendor ID instead of a name.
+		if line != "" && regexp.MustCompile(`(?i)\b8086:[0-9a-f]{4}\b`).MatchString(line) {
+			return parseIntelGPUName(line, deviceID)
 		}
 	}
 
-	// Method 2: glxinfo provides the most specific model name (e.g. "Intel(R) UHD Graphics 770" or "Intel(R) HD Graphics 4600")
+	// Method 2: glxinfo provides the most specific model name (e.g. "Intel(R) UHD Graphics 770").
+	// Only trust it when it actually mentions Intel so hybrid systems do not end up
+	// naming a discrete GPU (e.g. NVIDIA) after an integrated card.
 	line := runShell("glxinfo | grep 'OpenGL renderer'")
 	if line != "" {
 		parts := strings.Split(line, ":")
-		if len(parts) > 1 {
-			renderer := strings.TrimSpace(parts[1])
-			return parseIntelGPUName(renderer)
+		if len(parts) > 1 && strings.Contains(strings.ToLower(parts[1]), "intel") {
+			return parseIntelGPUName(strings.TrimSpace(parts[1]), deviceID)
 		}
 	}
 
-	// Method 3: Check if i915 driver is loaded (indicates Intel GPU present)
-	// This handles integrated graphics that don't have a separate DRM device path
+	// Method 3: Check if i915 driver is loaded (indicates Intel GPU present).
+	// This handles integrated graphics that don't have a separate DRM device path.
 	if _, err := os.Stat("/sys/module/i915"); err == nil {
-		// Try lspci for VGA devices with Intel
+		// Try lspci for VGA devices with Intel ("-n" exposes the [8086:xxxx] ID).
 		line = runShell("lspci -nnk | grep -i 'vga' | grep -i intel")
 		if line != "" {
-			return parseIntelGPUName(line)
+			return parseIntelGPUName(line, deviceID)
 		}
 
-		// Fallback: check glxinfo again (handles both discrete and integrated GPUs)
+		// Fallback: check glxinfo again (handles both discrete and integrated GPUs).
 		line = runShell("glxinfo 2>/dev/null | grep 'OpenGL renderer' || lspci -nnk | grep -i intel")
 		if line != "" {
-			return parseIntelGPUName(line)
+			return parseIntelGPUName(line, deviceID)
 		}
 
-		// Last resort: generic Intel GPU detection
+		// Last resort: generic Intel GPU detection.
 		name := firstNonEmpty(
 			runShell("lspci | grep -i 'intel'"),
 			runShell("glxinfo 2>/dev/null | grep renderer"),
 		)
 		if name != "" {
-			return parseIntelGPUName(name)
+			return parseIntelGPUName(name, deviceID)
 		}
 
 		return "Intel UHD Graphics" // Generic fallback for integrated GPUs without specific info
 	}
 
-	// Method 4: Generic lspci intel grep as last resort (handles some edge cases)
+	// Method 4: Generic lspci intel grep as last resort (handles some edge cases).
 	name := firstNonEmpty(
 		runShell("lspci | grep -i 'intel'"),
 		runShell("glxinfo | grep -i renderer"),
 	)
 	if name != "" {
-		return parseIntelGPUName(name)
+		return parseIntelGPUName(name, deviceID)
 	}
 
 	return "Intel GPU"
 }
 
-// parseIntelGPUName extracts and formats the Intel GPU model from an lspci output line.
-// It handles various output formats including:
-//   - "Intel Corporation Device 9a49 (rev xx)" -> "Intel Arc A380"
+// parseIntelGPUName extracts a human readable Intel GPU model from an lspci
+// output line or OpenGL renderer string. PCI device IDs (provided explicitly,
+// e.g. from sysfs, or embedded in the line as "[8086:xxxx]") are mapped to
+// specific marketing names first; branded renderer strings like "Intel(R) UHD
+// Graphics 630" are normalized next; otherwise the cleaned-up lspci device
+// name is returned. Examples:
+//   - "…4th Gen Core Processor Integrated Graphics Controller [8086:0416] (rev 06)" -> "Intel HD Graphics 4600"
 //   - "Intel(R) UHD Graphics 630" -> "Intel UHD Graphics 630"
-//   - "Intel(R) Iris Xe Graphics G7" -> "Intel Iris Xe Graphics G7"
-//   - "Intel(R) UHD Graphics X590" -> "Intel UHD Graphics X590"
-func parseIntelGPUName(line string) string {
+func parseIntelGPUName(line string, deviceIDs ...string) string {
 	line = strings.TrimSpace(line)
 
-	// Check for Intel branded graphics (most specific)
-	if matched, _ := regexp.MatchString(`(Intel|R)\s+[A-Z][a-z]+\s+Graphics\s+[A-Za-z0-9]+`, line); matched {
-		return strings.ReplaceAll(strings.TrimSpace(line), "Intel(R)", "Intel")
-	}
-
-	// Check for Intel Corporation Device XXXX format (needs mapping)
-	if matched, _ := regexp.MatchString(`intel corporation device ([a-f0-9]{4})`, strings.ToLower(line)); matched {
-		deviceID := extractHexMatch(line, `([a-f0-9]{4})`)
-		model := getIntelDeviceModel(deviceID)
-		return model + " (PCI: " + cleanPCIDeviceName(strings.TrimSpace(line)) + ")"
-	}
-
-	// Check for Intel Corporation Graphics Device XXXX format
-	if matched, _ := regexp.MatchString(`intel corporation graphics device ([a-f0-9]{4})`, strings.ToLower(line)); matched {
-		deviceID := extractHexMatch(line, `([a-f0-9]{4})`)
-		model := getIntelDeviceModel(deviceID)
-		return model + " (PCI: " + cleanPCIDeviceName(strings.TrimSpace(line)) + ")"
-	}
-
-	return cleanPCIDeviceName(line)
-}
-
-// extractHexMatch extracts a hex match from a line using a regex pattern.
-func extractHexMatch(line, pattern string) string {
-	matches := regexp.MustCompile(pattern).FindStringSubmatch(line)
-	if len(matches) >= 2 {
-		return strings.ToUpper(matches[1])
-	}
-	return ""
-}
-
-// getIntelDeviceModel maps Intel PCI device IDs to their human-readable names.
-func getIntelDeviceModel(deviceID string) string {
-	// Use a slice-based lookup since some device IDs can map to multiple models.
-	// The first match wins (order matters).
-	mappings := []struct {
-		id      string
-		model   string
-		priority int // lower = higher priority, so these come first
-	}{
-		{"9a49", "Intel Arc A380", 1},
-		{"7d2b", "Intel Arc A580", 2},
-		{"61ed", "Intel Arc A770", 3},
-		{"61e1", "Intel Arc A750", 4},
-		{"61ae", "Intel Arc A310", 5},
-		{"9bc4", "Intel Arc B580", 6},
-		{"9bc2", "Intel Arc B570", 7},
-		{"9bc6", "Intel Arc B550", 8},
-		{"7cfd", "Intel Arc A310M (mobile)", 9},
-		{"4bba", "Intel Arc A580V (Arc Max)", 10}, // Arc Max variant
-		{"7daa", "Intel Arc A380M (mobile)", 11},
-		// These are less common variants of the same PCI ID:
-		{"4bba", "Intel UHD Graphics X590", 20},     // appears after Arc Max, lower priority
-		{"7d2b", "Intel UHD Graphics A360V", 21},   // appears after Arc A580, lower priority
-		// Legacy Iris Xe devices:
-		{"63e0", "Intel Iris Xe Graphics G4 (Tiger Lake)", 22},
-		{"63c8", "Intel Iris Xe Graphics G5 (Alder Lake-P)", 23},
-		{"9a26", "Intel Iris Xe Graphics G7 (Tiger Lake-HX)", 24},
-	}
-
-	for _, m := range mappings {
-		if strings.ToUpper(deviceID) == m.id {
-			return m.model
+	// Collect candidate PCI device IDs: the explicit ones plus any 8086:xxxx
+	// marker found in the line itself (with or without "[...]" brackets).
+	var ids []string
+	for _, id := range deviceIDs {
+		if id != "" {
+			ids = append(ids, strings.ToUpper(id))
 		}
 	}
-	return ""
+	if m := regexp.MustCompile(`(?i)\b8086:([0-9a-f]{4})\b`).FindStringSubmatch(line); len(m) >= 2 {
+		ids = append(ids, strings.ToUpper(m[1]))
+	}
+
+	for _, id := range ids {
+		if model := getIntelDeviceModel(id); model != "" {
+			return model
+		}
+	}
+
+	// Branded renderer/device names (e.g. "Intel(R) UHD Graphics 630",
+	// "Intel Iris Xe Graphics"): normalize the "(R)" trademark marks.
+	cleaned := cleanPCIDeviceName(line)
+	lower := strings.ToLower(cleaned)
+	if strings.Contains(lower, "intel") && strings.Contains(lower, "graphics") {
+		return strings.TrimSpace(strings.ReplaceAll(cleaned, "(R)", ""))
+	}
+
+	return cleaned
 }
 
-// cleanPCIDeviceName strips vendor/device prefixes from a PCI name to extract the model.
+// getIntelDeviceModel maps Intel PCI device IDs to their human-readable model names.
+func getIntelDeviceModel(deviceID string) string {
+	deviceID = strings.ToUpper(strings.TrimSpace(deviceID))
+	if deviceID == "" {
+		return ""
+	}
+	mappings := map[string]string{
+		// Discrete Arc GPUs:
+		"9A49": "Intel Arc A380",
+		"7D2B": "Intel Arc A580",
+		"61ED": "Intel Arc A770",
+		"61E1": "Intel Arc A750",
+		"61AE": "Intel Arc A310",
+		"9BC4": "Intel Arc B580",
+		"9BC2": "Intel Arc B570",
+		"9BC6": "Intel Arc B550",
+		"7CFD": "Intel Arc A310M (mobile)",
+		"7DAA": "Intel Arc A380M (mobile)",
+		// Iris Xe:
+		"63E0": "Intel Iris Xe Graphics G4 (Tiger Lake)",
+		"63C8": "Intel Iris Xe Graphics G5 (Alder Lake-P)",
+		"9A26": "Intel Iris Xe Graphics G7 (Tiger Lake-HX)",
+		// Kaby Lake / Skylake UHD:
+		"591C": "Intel UHD Graphics 630",
+		"591B": "Intel UHD Graphics P630",
+		"5912": "Intel UHD Graphics 615",
+		"5916": "Intel UHD Graphics 617",
+		"5915": "Intel UHD Graphics 612",
+		"5914": "Intel UHD Graphics P600",
+		// Haswell HD:
+		"0C0B": "Intel HD Graphics 510",
+		"0C0A": "Intel HD Graphics 530",
+		"0C09": "Intel HD Graphics 520",
+		"0C08": "Intel HD Graphics 515",
+		"0C07": "Intel HD Graphics 5500",
+		"0416": "Intel HD Graphics 4600",
+		"0412": "Intel HD Graphics 4600",
+		"0411": "Intel HD Graphics 4400",
+		// Ivy Bridge:
+		"0166": "Intel HD Graphics 4000",
+		"0162": "Intel HD Graphics 4000",
+		"0152": "Intel HD Graphics 4000",
+		"0156": "Intel Iris",
+		// Sandy Bridge / Atom:
+		"0134": "Intel HD Graphics (Sandy Bridge)",
+		"012E": "Intel HD Graphics",
+	}
+	return mappings[deviceID]
+}
+
+// cleanPCIDeviceName strips the PCI address/class prefix, vendor/device ID and
+// revision suffix from an lspci output line so only the device name remains.
 func cleanPCIDeviceName(name string) string {
-	name = strings.TrimSpace(strings.TrimSuffix(name, "(rev xx)"))
-	name = strings.TrimSpace(strings.TrimSuffix(name, " (rev xx)"))
-	parts := strings.Split(name, "(")
-	if len(parts) > 1 {
-		return parts[0]
-	}
-	return name
-}
-
-// parseGPUNameFromLspci is a legacy alias for backward compatibility.
-func parseGPUNameFromLspci(line string) string {
-	line = strings.TrimSpace(line)
-	if matched, _ := regexp.MatchString(`(intel|r)\s+[a-z]+\s+graphics\s+`, line); matched {
-		return cleanPCIDeviceName(line)
-	}
-
-	// Handle "Intel Corporation Device XXXX" format
-	if strings.Contains(strings.ToLower(line), "intel corporation device") {
-		deviceID := extractHexMatch(line, `([a-f0-9]{4})`)
-		model := getIntelDeviceModel(deviceID)
-		return model + " (PCI: " + cleanPCIDeviceName(line) + ")"
-	}
-
-	return cleanPCIDeviceName(line)
+	name = strings.TrimSpace(name)
+	// Strip trailing markers like "(rev 06)" and "[8086:0416]".
+	name = regexp.MustCompile(`\s*\((?:rev|subsystem)\s+[0-9a-fA-F]+\)$`).ReplaceAllString(name, "")
+	name = regexp.MustCompile(`\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]$`).ReplaceAllString(name, "")
+	// Strip the leading "XX:YY.Z VGA compatible controller [NNNN]:" prefix.
+	name = regexp.MustCompile(`^[^ ]+\s+VGA compatible controller(?:\s*\[\d{4}\])?:?\s*`).ReplaceAllString(name, "")
+	return strings.TrimSpace(name)
 }
 
 func firstNonEmpty(values ...string) string {

@@ -179,3 +179,81 @@ func TestGetAllInformationsMultipleCards(t *testing.T) {
 		}
 	}
 }
+
+func TestParseIntelGPUName(t *testing.T) {
+	testCases := []struct {
+		line      string
+		deviceIDs []string
+		want      string
+	}{
+		// Real-world line from a Haswell laptop (lspci -s <addr> -n): the PCI ID
+		// in the [8086:xxxx] marker must map to the specific model name.
+		{
+			line: "00:02.0 VGA compatible controller [0300]: Intel Corporation 4th Gen Core Processor Integrated Graphics Controller [8086:0416] (rev 06)",
+			want: "Intel HD Graphics 4600",
+		},
+		// Bare ID format produced by "lspci -s <addr> -n" on this machine.
+		{line: "00:02.0 0300: 8086:0416 (rev 06)", want: "Intel HD Graphics 4600"},
+		// Same line without -n (no ID in the output): the sysfs-provided ID is used.
+		{
+			line:      "00:02.0 VGA compatible controller: Intel Corporation 4th Gen Core Processor Integrated Graphics Controller (rev 06)",
+			deviceIDs: []string{"0416"},
+			want:      "Intel HD Graphics 4600",
+		},
+		// glxinfo renderer strings are already branded.
+		{line: "Intel(R) UHD Graphics 630", want: "Intel UHD Graphics 630"},
+		{line: "Intel(R) Iris(R) Xe Graphics [4th Gen Intel(R) Core Processor]", want: "Intel Iris Xe Graphics [4th Gen Intel Core Processor]"},
+		// Discrete Arc GPU identified by PCI ID.
+		{
+			line: "01:00.0 VGA compatible controller [0300]: Intel Corporation Device 9a49 [8086:9a49] (rev 02)",
+			want: "Intel Arc A380",
+		},
+		// Unknown device ID falls back to the cleaned-up lspci name.
+		{
+			line: "01:00.0 VGA compatible controller [0300]: Intel Corporation Test GPU [8086:beef] (rev 01)",
+			want: "Intel Corporation Test GPU",
+		},
+	}
+
+	for _, tc := range testCases {
+		got := parseIntelGPUName(tc.line, tc.deviceIDs...)
+		if got != tc.want {
+			t.Errorf("parseIntelGPUName(%q, %v) = %q, want %q", tc.line, tc.deviceIDs, got, tc.want)
+		}
+	}
+}
+
+func TestCleanPCIDeviceName(t *testing.T) {
+	testCases := []struct{ in, want string }{
+		{
+			in:   "00:02.0 VGA compatible controller [0300]: Intel Corporation 4th Gen Core Processor Integrated Graphics Controller [8086:0416] (rev 06)",
+			want: "Intel Corporation 4th Gen Core Processor Integrated Graphics Controller",
+		},
+		{
+			in:   "00:02.0 VGA compatible controller: Intel Corporation Foo Bar (rev 05)",
+			want: "Intel Corporation Foo Bar",
+		},
+		{in: "Intel Corporation Plain Name", want: "Intel Corporation Plain Name"},
+	}
+
+	for _, tc := range testCases {
+		if got := cleanPCIDeviceName(tc.in); got != tc.want {
+			t.Errorf("cleanPCIDeviceName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestGetIntelDeviceModel(t *testing.T) {
+	if model := getIntelDeviceModel("0416"); model != "Intel HD Graphics 4600" {
+		t.Errorf("getIntelDeviceModel(0416) = %q, want Intel HD Graphics 4600", model)
+	}
+	if model := getIntelDeviceModel("9a49"); model != "Intel Arc A380" {
+		t.Errorf("getIntelDeviceModel(9a49) = %q, want Intel Arc A380", model)
+	}
+	if model := getIntelDeviceModel("unknown-id-here"); model != "" {
+		t.Errorf("getIntelDeviceModel(unknown) = %q, want empty string", model)
+	}
+	if model := getIntelDeviceModel(""); model != "" {
+		t.Errorf("getIntelDeviceModel(empty) = %q, want empty string", model)
+	}
+}
