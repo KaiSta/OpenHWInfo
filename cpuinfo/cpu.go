@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -71,55 +72,64 @@ func GetInformations() shared.HardwareData {
 func parseSensorOutput(lines []string) map[string]interface{} {
 	var temps = make(map[string]interface{})
 	var tccdCount = 0
+	var coreCount = 0
 
 	for i, line := range lines {
-		if strings.HasPrefix(line, "CPU") {
-			tempStr := strings.TrimLeft(strings.Split(line, ":")[1], " +")
-			// Try to parse as numeric value
-			if tempValue, err := strconv.ParseFloat(strings.TrimSuffix(tempStr, "C"), 64); err == nil {
-				temps["cpu.temp"] = tempValue
+		switch {
+		case strings.HasPrefix(line, "CPU"):
+			// Some chipsets expose a plainly named CPU sensor.
+			setTemperature(temps, "cpu.temp", firstFieldAfterColon(line))
+		case strings.Contains(line, "Core") || strings.Contains(line, "Package"):
+			label := labelBeforeColon(line)
+			if label == "" {
+				continue
+			}
+			// coretemp reports the chip-wide reading as "Package id N" — the CPU
+			// temperature the frontend labels as such — plus one reading per
+			// physical core. Both get canonical keys; deriving them from the
+			// sensor label is what previously left these readings unbound.
+			if strings.HasPrefix(label, "Package") {
+				setTemperature(temps, "cpu.temp", firstFieldAfterColon(line))
 			} else {
-				temps["cpu.temp"] = tempStr
+				setTemperature(temps, fmt.Sprintf("cpu.coreTemp%d", coreCount), firstFieldAfterColon(line))
+				coreCount++
 			}
-		} else if strings.Contains(line, "Core") || strings.Contains(line, "Package") {
-			tempStr := extractTemp(line)
-			// Try to parse as numeric value
-			if tempValue, err := strconv.ParseFloat(strings.TrimSuffix(tempStr, "C"), 64); err == nil {
-				temps["cpu."+strings.Split(line, ":")[0]] = tempValue
-			} else {
-				temps["cpu."+strings.Split(line, ":")[0]] = tempStr
+		case strings.HasPrefix(line, "Tctl"):
+			setTemperature(temps, "cpu.temp", firstFieldAfterColon(line))
+		case strings.HasPrefix(line, "pch"):
+			if i+2 < len(lines) {
+				setTemperature(temps, "cpu.pch", firstFieldAfterColon(lines[i+2]))
 			}
-		} else if strings.HasPrefix(line, "Tctl") {
-			tempStr := strings.TrimLeft(strings.Split(line, ":")[1], " +")
-			// Try to parse as numeric value
-			if tempValue, err := strconv.ParseFloat(strings.TrimSuffix(tempStr, "C"), 64); err == nil {
-				temps["cpu.temp"] = tempValue
-			} else {
-				temps["cpu.temp"] = tempStr
+		case strings.Contains(line, "Tccd") && tccdCount < 6:
+			raw := firstFieldAfterColon(line)
+			if raw == "" {
+				continue
 			}
-		} else if strings.HasPrefix(line, "pch") && i+2 < len(lines) {
-			tempStr := strings.TrimLeft(strings.Split(lines[i+2], ":")[1], " +")
-			// Try to parse as numeric value
-			if tempValue, err := strconv.ParseFloat(strings.TrimSuffix(tempStr, "C"), 64); err == nil {
-				temps["cpu.pch"] = tempValue
-			} else {
-				temps["cpu.pch"] = tempStr
-			}
-		} else if strings.Contains(line, "Tccd") {
-			if tccdCount < 6 {
-				sensorName := fmt.Sprintf("tccd%d", tccdCount)
-				tempStr := extractTemp(line)
-				// Try to parse as numeric value
-				if tempValue, err := strconv.ParseFloat(strings.TrimSuffix(tempStr, "C"), 64); err == nil {
-					temps[sensorName] = tempValue
-				} else {
-					temps[sensorName] = tempStr
-				}
-				tccdCount++
-			}
+			setTemperature(temps, fmt.Sprintf("tccd%d", tccdCount), raw)
+			tccdCount++
 		}
 	}
 	return temps
+}
+
+// firstFieldAfterColon returns the trimmed text after the first ":" in s, or
+// "" when the line contains no colon.
+func firstFieldAfterColon(s string) string {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(s[idx+1:])
+}
+
+// labelBeforeColon returns the trimmed sensor label preceding the first ":" in
+// s, or "" when the line contains no colon.
+func labelBeforeColon(s string) string {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(s[:idx])
 }
 
 func parseCpuInfo(lines []string) (string, map[string]interface{}) {
@@ -128,30 +138,71 @@ func parseCpuInfo(lines []string) (string, map[string]interface{}) {
 	var brand string
 	var model string
 	var cpus = make(map[string]interface{})
+
+	// /proc/cpuinfo lists one block per logical processor, and within a block
+	// "cpu MHz" comes before "core id". Each block is therefore buffered and
+	// flushed when the next one starts, so a thread's clock and the physical core
+	// it belongs to can be emitted together.
+	var clockIndex int
+	var blockHasClock bool
+	var blockMHz interface{}
+	var blockCoreID string
+
+	flush := func() {
+		if !blockHasClock {
+			return
+		}
+		index := strconv.Itoa(clockIndex)
+		cpus["cpu.clock"+index] = blockMHz
+		// Expose which physical core this thread runs on, so the UI can show the
+		// core's temperature next to each thread instead of guessing that thread
+		// N belongs to core N (false whenever SMT is enabled).
+		if blockCoreID != "" {
+			cpus["cpu.coreOf"+index] = blockCoreID
+		}
+		clockIndex++
+	}
+
 	for _, line := range lines {
-		if strings.HasPrefix(line, "model name") {
-			name = strings.TrimSpace(strings.Split(line, ":")[1])
-		} else if strings.HasPrefix(line, "vendor_id") {
-			vendorID = strings.TrimSpace(strings.Split(line, ":")[1])
-		} else if strings.HasPrefix(line, "cpu MHz") {
-			cpuMHzStr := strings.TrimSpace(strings.Split(line, ":")[1])
-			if cpuMHz, err := strconv.ParseFloat(cpuMHzStr, 64); err == nil {
-				cpus["cpu.clock"+strconv.Itoa(len(cpus))] = cpuMHz
-			} else {
-				cpus["cpu.clock"+strconv.Itoa(len(cpus))] = cpuMHzStr + " MHz"
+		switch {
+		case strings.HasPrefix(line, "processor"):
+			flush()
+			blockHasClock = false
+			blockMHz = nil
+			blockCoreID = ""
+		case strings.HasPrefix(line, "model name"):
+			if v := firstFieldAfterColon(line); v != "" {
+				name = v
+			}
+		case strings.HasPrefix(line, "vendor_id"):
+			if v := firstFieldAfterColon(line); v != "" {
+				vendorID = v
+			}
+		case strings.HasPrefix(line, "core id"):
+			if v := firstFieldAfterColon(line); v != "" {
+				blockCoreID = v
+			}
+		case strings.HasPrefix(line, "cpu MHz"):
+			if v := firstFieldAfterColon(line); v != "" {
+				blockHasClock = true
+				if cpuMHz, err := strconv.ParseFloat(v, 64); err == nil {
+					blockMHz = cpuMHz
+				} else {
+					blockMHz = v + " MHz"
+				}
 			}
 		}
 	}
+	flush()
 
-	// Extract brand and model from name
+	// Extract brand and model from name.
 	if len(name) > 0 && strings.Contains(name, "@") {
 		parts := strings.Split(name, "@")
 		name = strings.TrimSpace(parts[0])
 	}
 
-	// Simple heuristic to extract brand and model
+	// Simple heuristic to extract brand and model.
 	if len(name) > 0 {
-		// Try to find (Ryzen|Core|Pentium|Celeron|Athlon|EPYC|Threadripper)
 		brandModel := strings.SplitN(name, " ", 2)
 		if len(brandModel) == 2 {
 			brand = brandModel[0]
@@ -169,18 +220,39 @@ func parseCpuInfo(lines []string) (string, map[string]interface{}) {
 	return name, cpus
 }
 
-func extractTemp(line string) string {
-	elements := strings.Split(line, ":")
-	temp := ""
-	for _, c := range elements[1] {
-		if c == 'C' {
-			break
-		}
-		temp += string(c)
+// temperatureRe matches the first number in an lm-sensors temperature field.
+var temperatureRe = regexp.MustCompile(`[-+]?[0-9]+(?:\.[0-9]+)?`)
+
+// parseCelsius recovers the reading from a sensor field such as "  +48.0°C" or
+// "+48.0°C  (high = +84.0°C, crit = +100.0°C)". Only the first number is taken,
+// so it works whether or not the field carries threshold annotations.
+func parseCelsius(raw string) (float64, bool) {
+	match := temperatureRe.FindString(raw)
+	if match == "" {
+		return 0, false
 	}
-	return temp + "C"
+	value, err := strconv.ParseFloat(match, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
 }
 
+// setTemperature stores a sensor reading under key. It prefers a clean float so
+// the UI formats it like every other metric, falling back to the trimmed raw
+// text when no number can be recovered.
+func setTemperature(temps map[string]interface{}, key, raw string) {
+	if raw == "" {
+		return
+	}
+	if value, ok := parseCelsius(raw); ok {
+		temps[key] = value
+		return
+	}
+	temps[key] = strings.TrimSpace(raw)
+}
+
+// mergeMaps copies all entries from m2 into m1 and returns m1.
 func mergeMaps(m1, m2 map[string]string) map[string]string {
 	for k, v := range m2 {
 		m1[k] = v

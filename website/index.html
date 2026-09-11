@@ -176,6 +176,102 @@
         .bar.good { background: linear-gradient(90deg, #2fd17a, #58e0a0); }
         .bar.warn { background: linear-gradient(90deg, #ffb020, #ffd35c); }
         .bar.bad  { background: linear-gradient(90deg, #ff5d6c, #ff8a97); }
+        .bar.clock { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+        /* Compact per-core clock grid (built by buildCoreGrid). */
+        .cores {
+            border-top: 1px solid var(--border);
+            padding: 14px 18px 16px;
+        }
+
+        .cores-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .cores-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--muted);
+        }
+
+        .cores-note {
+            font-size: 12px;
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .core-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+            gap: 8px;
+        }
+
+        .core {
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 8px 9px 9px;
+        }
+
+        .core-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 6px;
+        }
+
+        .core-name {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        /* Per-core temperature, shown beside the core when sensors and threads
+           line up 1:1. */
+        .core-temp {
+            font-size: 10.5px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            color: var(--muted);
+        }
+
+        .core-temp.good { color: var(--good); }
+        .core-temp.warn { color: var(--warn); }
+        .core-temp.bad  { color: var(--bad); }
+
+        .core-value {
+            display: block;
+            margin-top: 1px;
+            font-size: 15px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .core-unit {
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--muted);
+            margin-left: 3px;
+        }
+
+        .core .bar-wrap { margin-top: 7px; height: 4px; }
+
+        .core-range {
+            margin-top: 6px;
+            font-size: 10.5px;
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+        }
 
         footer.note {
             margin-top: 28px;
@@ -320,21 +416,265 @@
             return section;
         }
 
+        // ---- Per-core clocks & temperatures --------------------------------
+        // Cores are rendered as compact grids rather than one table row each: a
+        // 32-thread CPU would otherwise add 32 rows to the card.
+        function isClockKey(key) {
+            return /^cpu\.clock\d+$/.test(key);
+        }
+
+        function isCoreTempKey(key) {
+            return /^cpu\.coreTemp\d+$/.test(key);
+        }
+
+        function trailingIndex(key) {
+            var match = key.match(/(\d+)$/);
+            return match ? parseInt(match[1], 10) : null;
+        }
+
+        // Severity class for a temperature, reusing the table's gauge thresholds.
+        function tempSeverity(value) {
+            var g = frac(value, 100);
+            return g ? g.cls : "good";
+        }
+
+        // Header plus an empty grid container for one compact core block.
+        function coreSection(titleText, noteText) {
+            var section = document.createElement("div");
+            section.className = "cores";
+
+            var head = document.createElement("div");
+            head.className = "cores-head";
+
+            var title = document.createElement("span");
+            title.className = "cores-title";
+            title.textContent = titleText;
+
+            var note = document.createElement("span");
+            note.className = "cores-note";
+            note.textContent = noteText;
+
+            head.appendChild(title);
+            head.appendChild(note);
+
+            var grid = document.createElement("div");
+            grid.className = "core-grid";
+
+            section.appendChild(head);
+            section.appendChild(grid);
+            return { section: section, grid: grid };
+        }
+
+        // min – max line shared by every core cell.
+        function coreRange(minValues, maxValues, key) {
+            var lo = num(minValues && minValues[key]);
+            var hi = num(maxValues && maxValues[key]);
+            var range = document.createElement("div");
+            range.className = "core-range";
+            if (lo !== null || hi !== null) {
+                range.textContent = (lo === null ? "—" : String(Math.round(lo))) +
+                    " – " + (hi === null ? "—" : String(Math.round(hi)));
+            }
+            return range;
+        }
+
+        function buildCoreGrid(clockKeys, coreTempKeys, values, minValues, maxValues) {
+            var out = document.createDocumentFragment();
+
+            // Scale every bar against the highest clock any core has reached, so
+            // the bars show boost headroom instead of pinning one core at 100%.
+            var peak = 0;
+            clockKeys.forEach(function (k) {
+                var seen = num(maxValues && maxValues[k.Key]);
+                var current = num(values[k.Key]);
+                var candidate = seen !== null ? seen : (current !== null ? current : 0);
+                if (candidate > peak) peak = candidate;
+            });
+
+            var tempByIndex = {};
+            coreTempKeys.forEach(function (k) {
+                var index = trailingIndex(k.Key);
+                if (index !== null) tempByIndex[index] = k;
+            });
+
+            // The backend reports which physical core each thread runs on
+            // (cpu.coreOfN, from /proc/cpuinfo). When that is available a thread
+            // can be shown its own core's temperature even under SMT, where
+            // there are more threads than core sensors.
+            var tempByCore = {};
+            coreTempKeys.forEach(function (k) {
+                var index = trailingIndex(k.Key);
+                if (index !== null) tempByCore[String(index)] = num(values[k.Key]);
+            });
+            var hasTopology = coreTempKeys.length > 0 && clockKeys.length > 0 &&
+                clockKeys.every(function (k) {
+                    var index = trailingIndex(k.Key);
+                    return index !== null && values["cpu.coreOf" + index] !== undefined;
+                });
+
+            // Without topology the only safe pairing is one sensor per thread.
+            // Index pairing under SMT would attribute a core's heat to whichever
+            // thread happens to share its number, so the sensors get their own
+            // block instead. Nothing is ever paired on a guess.
+            var pairTemps = coreTempKeys.length > 0 &&
+                (hasTopology || coreTempKeys.length === clockKeys.length);
+
+            // Temperature for the physical core a given thread runs on.
+            function tempForClock(key) {
+                if (hasTopology) {
+                    var index = trailingIndex(key);
+                    if (index === null) return null;
+                    return tempByCore[String(values["cpu.coreOf" + index]).trim()];
+                }
+                var tempKey = tempByIndex[trailingIndex(key)];
+                if (!tempKey) return null;
+                var paired = num(values[tempKey.Key]);
+                return paired === undefined ? null : paired;
+            }
+
+            if (clockKeys.length > 0) {
+                var threads = clockKeys.length + (clockKeys.length === 1 ? " thread" : " threads");
+                var clocks = coreSection(
+                    "Per-core clocks",
+                    peak > 0 ? threads + " · peak " + Math.round(peak) + " MHz" : threads
+                );
+
+                clockKeys.forEach(function (k) {
+                    var current = num(values[k.Key]);
+
+                    var cell = document.createElement("div");
+                    cell.className = "core";
+
+                    var head = document.createElement("div");
+                    head.className = "core-head";
+
+                    var name = document.createElement("span");
+                    name.className = "core-name";
+                    name.textContent = "Core " + k.Key.replace(/^cpu\.clock/, "");
+                    head.appendChild(name);
+
+                    if (pairTemps) {
+                        var temp = tempForClock(k.Key);
+                        if (temp !== null && temp !== undefined) {
+                            var tempEl = document.createElement("span");
+                            tempEl.className = "core-temp " + tempSeverity(temp);
+                            tempEl.textContent = Math.round(temp) + "°C";
+                            head.appendChild(tempEl);
+                        }
+                    }
+
+                    var value = document.createElement("div");
+                    value.className = "core-value";
+                    value.textContent = current === null ? "—" : String(Math.round(current));
+                    if (current !== null) {
+                        var unit = document.createElement("span");
+                        unit.className = "core-unit";
+                        unit.textContent = "MHz";
+                        value.appendChild(unit);
+                    }
+
+                    var barWrap = document.createElement("div");
+                    barWrap.className = "bar-wrap";
+                    var bar = document.createElement("div");
+                    bar.className = "bar clock";
+                    bar.style.width = (peak > 0 && current !== null)
+                        ? Math.round(Math.max(0, Math.min(1, current / peak)) * 100) + "%"
+                        : "0%";
+                    barWrap.appendChild(bar);
+
+                    cell.appendChild(head);
+                    cell.appendChild(value);
+                    cell.appendChild(barWrap);
+                    cell.appendChild(coreRange(minValues, maxValues, k.Key));
+                    clocks.grid.appendChild(cell);
+                });
+
+                out.appendChild(clocks.section);
+            }
+
+            // Core sensors that were not folded into a clock cell get their own
+            // block, so they stay visible and are never mislabeled.
+            if (coreTempKeys.length > 0 && !pairTemps) {
+                var sensors = coreTempKeys.length === 1 ? " sensor" : " sensors";
+                var temps = coreSection("Per-core temperatures", coreTempKeys.length + sensors);
+
+                coreTempKeys.forEach(function (k) {
+                    var current = num(values[k.Key]);
+
+                    var cell = document.createElement("div");
+                    cell.className = "core";
+
+                    var head = document.createElement("div");
+                    head.className = "core-head";
+
+                    var name = document.createElement("span");
+                    name.className = "core-name";
+                    name.textContent = "Core " + trailingIndex(k.Key);
+                    head.appendChild(name);
+
+                    var value = document.createElement("div");
+                    value.className = "core-value";
+                    value.textContent = current === null ? "—" : String(Math.round(current));
+                    if (current !== null) {
+                        var unit = document.createElement("span");
+                        unit.className = "core-unit";
+                        unit.textContent = "°C";
+                        value.appendChild(unit);
+                    }
+
+                    var barWrap = document.createElement("div");
+                    barWrap.className = "bar-wrap";
+                    var bar = document.createElement("div");
+                    bar.className = "bar " + tempSeverity(current === null ? 0 : current);
+                    var g = current === null ? null : frac(current, 100);
+                    bar.style.width = (g ? g.pct : 0) + "%";
+                    barWrap.appendChild(bar);
+
+                    cell.appendChild(head);
+                    cell.appendChild(value);
+                    cell.appendChild(barWrap);
+                    cell.appendChild(coreRange(minValues, maxValues, k.Key));
+                    temps.grid.appendChild(cell);
+                });
+
+                out.appendChild(temps.section);
+            }
+
+            return out;
+        }
+
         function render(data) {
             var grid = document.getElementById("cards");
             grid.innerHTML = "";
 
-            // CPU card.
+            // CPU card: summary metrics as table rows, then the per-core clocks
+            // and temperatures as compact grids below.
             var cpuBrand = data.CpuValues && data.CpuValues["cpu.brand"] ? data.CpuValues["cpu.brand"] : "CPU";
-            grid.appendChild(buildCard(
+            var cpuKeys = data.CpuKeys || [];
+            var cpuValues = data.CpuValues || {};
+            var cpuMinValues = data.CpuMinValues || {};
+            var cpuMaxValues = data.CpuMaxValues || {};
+
+            var clockKeys = cpuKeys.filter(function (k) { return isClockKey(k.Key); });
+            var coreTempKeys = cpuKeys.filter(function (k) { return isCoreTempKey(k.Key); });
+            var metricKeys = cpuKeys.filter(function (k) {
+                return !isClockKey(k.Key) && !isCoreTempKey(k.Key);
+            });
+
+            var cpuCard = buildCard(
                 "/resources/cpu.png",
                 "CPU",
-                cpuBrand + " · " + (data.CpuKeys ? data.CpuKeys.length : 0) + " metrics",
-                data.CpuKeys || [],
-                data.CpuValues || {},
-                data.CpuMinValues || {},
-                data.CpuMaxValues || {}
+                cpuBrand + " · " + cpuKeys.length + " metrics",
+                metricKeys,
+                cpuValues,
+                cpuMinValues,
+                cpuMaxValues
+            );
+
+            cpuCard.appendChild(buildCoreGrid(
+                clockKeys, coreTempKeys, cpuValues, cpuMinValues, cpuMaxValues
             ));
+            grid.appendChild(cpuCard);
 
             // GPU cards.
             (data.GpuViews || []).forEach(function (gpu) {

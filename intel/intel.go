@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -33,7 +32,7 @@ func probeIntel() ([]int, error) {
 		if _, err := os.Stat(devicePath); err != nil {
 			continue
 		}
-		if vendor, ok := readSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == intelVendorID {
+		if vendor, ok := shared.ReadSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == intelVendorID {
 			log.Printf("Found Intel card at index %d\n", i)
 			indices = append(indices, i)
 		}
@@ -59,7 +58,7 @@ func resolvePCIDevice(cardIndex int) string {
 // given DRM index directly from sysfs. This is more reliable than parsing lspci
 // output because it does not depend on the pci.ids database being installed.
 func getPCIDeviceID(cardIndex int) string {
-	id, ok := readSysFile(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex), "device"))
+	id, ok := shared.ReadSysFile(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex), "device"))
 	if !ok {
 		return ""
 	}
@@ -79,7 +78,7 @@ func getGPUName(cardIndex int) string {
 	// Method 1: Direct PCI address query - most reliable for multi-GPU systems.
 	// "-n" includes the 8086:xxxx device ID so it can be mapped to a model name.
 	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
-		line := strings.TrimSpace(runShell("lspci -s " + pciAddr + " -n"))
+		line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr + " -n"))
 		// The card index was verified as Intel (vendor 0x8086) by probeIntel, and
 		// "-n" output may contain only IDs without the word "Intel", so match on
 		// the vendor ID instead of a name.
@@ -91,7 +90,7 @@ func getGPUName(cardIndex int) string {
 	// Method 2: glxinfo provides the most specific model name (e.g. "Intel(R) UHD Graphics 770").
 	// Only trust it when it actually mentions Intel so hybrid systems do not end up
 	// naming a discrete GPU (e.g. NVIDIA) after an integrated card.
-	line := runShell("glxinfo | grep 'OpenGL renderer'")
+	line := shared.RunShell("glxinfo | grep 'OpenGL renderer'")
 	if line != "" {
 		parts := strings.Split(line, ":")
 		if len(parts) > 1 && strings.Contains(strings.ToLower(parts[1]), "intel") {
@@ -103,21 +102,21 @@ func getGPUName(cardIndex int) string {
 	// This handles integrated graphics that don't have a separate DRM device path.
 	if _, err := os.Stat("/sys/module/i915"); err == nil {
 		// Try lspci for VGA devices with Intel ("-n" exposes the [8086:xxxx] ID).
-		line = runShell("lspci -nnk | grep -i 'vga' | grep -i intel")
+		line = shared.RunShell("lspci -nnk | grep -i 'vga' | grep -i intel")
 		if line != "" {
 			return parseIntelGPUName(line, deviceID)
 		}
 
 		// Fallback: check glxinfo again (handles both discrete and integrated GPUs).
-		line = runShell("glxinfo 2>/dev/null | grep 'OpenGL renderer' || lspci -nnk | grep -i intel")
+		line = shared.RunShell("glxinfo 2>/dev/null | grep 'OpenGL renderer' || lspci -nnk | grep -i intel")
 		if line != "" {
 			return parseIntelGPUName(line, deviceID)
 		}
 
 		// Last resort: generic Intel GPU detection.
 		name := firstNonEmpty(
-			runShell("lspci | grep -i 'intel'"),
-			runShell("glxinfo 2>/dev/null | grep renderer"),
+			shared.RunShell("lspci | grep -i 'intel'"),
+			shared.RunShell("glxinfo 2>/dev/null | grep renderer"),
 		)
 		if name != "" {
 			return parseIntelGPUName(name, deviceID)
@@ -128,8 +127,8 @@ func getGPUName(cardIndex int) string {
 
 	// Method 4: Generic lspci intel grep as last resort (handles some edge cases).
 	name := firstNonEmpty(
-		runShell("lspci | grep -i 'intel'"),
-		runShell("glxinfo | grep -i renderer"),
+		shared.RunShell("lspci | grep -i 'intel'"),
+		shared.RunShell("glxinfo | grep -i renderer"),
 	)
 	if name != "" {
 		return parseIntelGPUName(name, deviceID)
@@ -249,17 +248,8 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func runShell(command string) string {
-	output, err := exec.Command("sh", "-c", command).Output()
-	if err != nil {
-		log.Printf("Error executing command %q: %v\n", command, err)
-		return ""
-	}
-	return strings.TrimSpace(string(output))
-}
-
 func openglRenderer() string {
-	line := runShell("glxinfo | grep 'OpenGL renderer'")
+	line := shared.RunShell("glxinfo | grep 'OpenGL renderer'")
 	parts := strings.Split(line, ":")
 	if len(parts) > 1 {
 		return strings.TrimSpace(parts[1])
@@ -270,10 +260,10 @@ func openglRenderer() string {
 // getDriverVersion returns the i915 driver version (the kernel version the
 // driver was built with), read from sysfs with a modinfo fallback.
 func getDriverVersion() string {
-	if version, ok := readSysFile(filepath.Join(sysDir, "module/i915/version")); ok && version != "" {
+	if version, ok := shared.ReadSysFile(filepath.Join(sysDir, "module/i915/version")); ok && version != "" {
 		return version
 	}
-	if version := runShell("modinfo i915 | awk '/^version:/ {print $2}'"); version != "" {
+	if version := shared.RunShell("modinfo i915 | awk '/^version:/ {print $2}'"); version != "" {
 		return version
 	}
 	return "Intel Driver"
@@ -290,7 +280,7 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	data[shared.GPUDriverVersion.Key] = shared.NewHardwareValue(getDriverVersion(), shared.UnknownUnit, shared.Unknown)
 
 	cardPath = filepath.Join(cardPath, "hwmon")
-	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
+	hwmonPath := shared.FindFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found for Intel card")
 		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
@@ -302,19 +292,19 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 
 	// GPU frequency (i915 reports Hz).
 	for _, file := range []string{"freq0_input", "freq1_input"} {
-		if v, ok := readSysFile(filepath.Join(hwmonPath, file)); ok {
-			data[shared.GPUFrequency.Key] = shared.NewHardwareValue(parseFrequencyValue(v), shared.MHz, shared.Frequency)
+		if v, ok := shared.ReadSysFile(filepath.Join(hwmonPath, file)); ok {
+			data[shared.GPUFrequency.Key] = shared.NewHardwareValue(shared.ParseFrequencyMHz(v), shared.MHz, shared.Frequency)
 			break
 		}
 	}
 
 	// Average power draw (i915 reports microwatts).
-	if v, ok := readSysFile(filepath.Join(hwmonPath, "power1_average")); ok {
-		data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(parsePowerValue(v), shared.Watt, shared.Power)
+	if v, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "power1_average")); ok {
+		data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(shared.ParsePower(v, 1000000), shared.Watt, shared.Power)
 	}
 
 	// Fan speed (rarely present on integrated graphics).
-	if v, ok := readSysFile(filepath.Join(hwmonPath, "fan1_input")); ok {
+	if v, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "fan1_input")); ok {
 		if rpm, err := strconv.Atoi(v); err == nil {
 			data[shared.FanSpeed.Key] = shared.NewHardwareValue(float64(rpm), shared.RPM, shared.Frequency)
 		}
@@ -349,47 +339,14 @@ func GetAllInformations() []shared.HardwareData {
 		result = append(result, collectGPUDataForCard(cardPath, cardIndex))
 	}
 	return result
-}
-
-func findFirstSubpath(basePath string, pattern string) string {
-	matches, _ := filepath.Glob(filepath.Join(basePath, pattern))
-	if len(matches) > 0 {
-		return matches[0]
-	}
-	return ""
-}
-
-func readSysFile(path string) (string, bool) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(string(content)), true
-}
-
+} // addTemperature records a millidegree-Celsius i915 hwmon sensor as degrees
+// Celsius, skipping the metric entirely when the sensor file is absent.
 func addTemperature(data *map[string]shared.HardwareValue, hwmonPath string, fileName string, key string) {
-	raw, ok := readSysFile(filepath.Join(hwmonPath, fileName))
+	raw, ok := shared.ReadSysFile(filepath.Join(hwmonPath, fileName))
 	if !ok {
 		return
 	}
 	if val, err := strconv.Atoi(raw); err == nil {
 		(*data)[key] = shared.NewHardwareValue(float64(val/1000), shared.Celsius, shared.Temperature)
 	}
-}
-
-func parseFrequencyValue(value string) float64 {
-	freq, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		log.Printf("Error parsing frequency value %q: %v\n", value, err)
-		return 0
-	}
-	return freq / 1000000 // Convert Hz to MHz
-}
-
-func parsePowerValue(raw string) float64 {
-	val, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || val < 0 {
-		return 0
-	}
-	return float64(val / 1000000) // Convert microwatts to watts
 }

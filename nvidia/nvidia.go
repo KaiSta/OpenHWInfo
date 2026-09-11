@@ -46,7 +46,7 @@ func probeNvidia() bool {
 
 // gpuIndices returns the index of every NVIDIA GPU known to nvidia-smi.
 func gpuIndices() []int {
-	lines := runShell("nvidia-smi --query-gpu=index --format=csv,noheader")
+	lines := shared.RunShell("nvidia-smi --query-gpu=index --format=csv,noheader")
 	var indices []int
 	for _, line := range strings.Split(lines, "\n") {
 		line = strings.TrimSpace(line)
@@ -62,7 +62,7 @@ func gpuIndices() []int {
 	}
 
 	// Fall back to counting the cards reported by `nvidia-smi -L`.
-	list := runShell("nvidia-smi -L")
+	list := shared.RunShell("nvidia-smi -L")
 	count := 0
 	for _, line := range strings.Split(list, "\n") {
 		if strings.TrimSpace(line) != "" {
@@ -78,15 +78,6 @@ func gpuIndices() []int {
 	}
 
 	return []int{0}
-}
-
-func runShell(command string) string {
-	output, err := exec.Command("sh", "-c", command).Output()
-	if err != nil {
-		log.Printf("Error executing command %q: %v\n", command, err)
-		return ""
-	}
-	return strings.TrimSpace(string(output))
 }
 
 // parseFloatField extracts the leading numeric value from a nvidia-smi CSV
@@ -126,7 +117,7 @@ func getInformationsForGPU(index int) shared.HardwareData {
 	name := "NVIDIA GPU"
 
 	query := strings.Join(gpuQueryFields, ",")
-	output := runShell("nvidia-smi -i " + strconv.Itoa(index) + " --query-gpu=" + query + " --format=csv,noheader")
+	output := shared.RunShell("nvidia-smi -i " + strconv.Itoa(index) + " --query-gpu=" + query + " --format=csv,noheader")
 	fields := parseCSVFields(output)
 
 	field := func(i int) string {

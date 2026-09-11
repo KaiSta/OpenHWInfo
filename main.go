@@ -4,6 +4,8 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
@@ -45,22 +47,56 @@ type Data struct {
 	CpuMaxValues map[string]string
 }
 
-var cpuTemplates = []shared.KeyTemplate{
-	shared.CPUVendorID,
-	shared.CPUBrand,
-	shared.CPUModel,
-	shared.CPUClock0,
-	shared.CPUClock1,
-	shared.CPUClock2,
-	shared.CPUClock3,
-	shared.CPUTemp,
-	shared.CPUPCHTemp,
-	shared.TCcd0,
-	shared.TCcd1,
-	shared.TCcd2,
-	shared.TCcd3,
-	shared.TCcd4,
-	shared.TCcd5,
+// cpuKeyTemplates assembles the CPU rows in display order: identity fields, one
+// row per core, package temperatures, then per-CCD temperatures. The clock and
+// Tccd rows are generated from the collected values so that no core or sensor
+// is hidden behind a fixed-size template list — a 16-core CPU shows 16 clock
+// rows rather than the first four.
+func cpuKeyTemplates(values map[string]shared.HardwareValue) []shared.KeyTemplate {
+	templates := []shared.KeyTemplate{
+		shared.CPUVendorID,
+		shared.CPUBrand,
+		shared.CPUModel,
+	}
+	templates = append(templates, indexedCPUTemplates(values, "cpu.clock", "CPU Clock %d")...)
+	templates = append(templates, shared.CPUTemp, shared.CPUPCHTemp)
+	templates = append(templates, indexedCPUTemplates(values, "cpu.coreTemp", "Core %d Temperature")...)
+	templates = append(templates, indexedCPUTemplates(values, "tccd", "Tccd %d Temperature")...)
+	return templates
+}
+
+// indexedCPUTemplates returns one template per collected key of the form
+// prefix + <number>, ordered by that number. labelFormat receives the index,
+// e.g. "CPU Clock %d" yields "CPU Clock 3".
+func indexedCPUTemplates(values map[string]shared.HardwareValue, prefix, labelFormat string) []shared.KeyTemplate {
+	var templates []shared.KeyTemplate
+	for _, index := range numericSuffixes(values, prefix) {
+		templates = append(templates, shared.KeyTemplate{
+			Label: fmt.Sprintf(labelFormat, index),
+			Key:   prefix + strconv.Itoa(index),
+		})
+	}
+	return templates
+}
+
+// numericSuffixes collects the numeric suffix of every value key shaped like
+// prefix + <digits>, sorted ascending, so display order follows core/sensor
+// order rather than Go's map iteration order.
+func numericSuffixes(values map[string]shared.HardwareValue, prefix string) []int {
+	var indices []int
+	for key := range values {
+		suffix, ok := strings.CutPrefix(key, prefix)
+		if !ok || suffix == "" {
+			continue
+		}
+		index, err := strconv.Atoi(suffix)
+		if err != nil {
+			continue
+		}
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	return indices
 }
 
 var gpuTemplates = []shared.KeyTemplate{
@@ -193,7 +229,7 @@ func (a *App) GetData() Data {
 
 	// Filter CPU keys to only show those with available values
 	var filteredCpuKeys []shared.KeyTemplate
-	for _, key := range cpuTemplates {
+	for _, key := range cpuKeyTemplates(cpuData.Values) {
 		if value, exists := cpuData.Values[key.Key]; exists && value.Value != "" {
 			filteredCpuKeys = append(filteredCpuKeys, key)
 		}

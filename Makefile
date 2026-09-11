@@ -15,6 +15,9 @@ DEV_TAGS := dev,webkit2_41
 APP      := openhwinfo
 VERSION  ?= 0.1.0
 ARCH     := $(shell dpkg --print-architecture)
+# Maintainer recorded in the .deb control file. Override with your real address
+# when publishing: make package MAINTAINER="Your Name <you@example.org>"
+MAINTAINER ?= KaiSta <kai@example.com>
 PKGDIR   := dist/$(APP)-package
 DEBNAME  := $(APP)_$(VERSION)_$(ARCH).deb
 
@@ -88,8 +91,8 @@ package: build
 	cp icons/icon-192.png $(PKGDIR)/usr/share/icons/hicolor/192x192/apps/openhwinfo.png
 	cp icons/icon-512.png $(PKGDIR)/usr/share/icons/hicolor/256x256/apps/openhwinfo.png
 	cp icons/icon-512.png $(PKGDIR)/usr/share/icons/hicolor/512x512/apps/openhwinfo.png
-	printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: KaiSta <kai@example.com>\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0\nDescription: OpenHWInfo — live CPU & GPU hardware monitor (Go + Wails v2)\n Displays real-time CPU and GPU metrics such as temperature, clock,\n usage, power draw and VRAM.\n' \
-	  "$(APP)" "$(VERSION)" "$(ARCH)" > $(PKGDIR)/DEBIAN/control
+	printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: %s\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0\nDescription: OpenHWInfo — live CPU & GPU hardware monitor (Go + Wails v2)\n Displays real-time CPU and GPU metrics such as temperature, clock,\n usage, power draw and VRAM.\n' \
+	  "$(APP)" "$(VERSION)" "$(ARCH)" "$(MAINTAINER)" > $(PKGDIR)/DEBIAN/control
 	chmod 0755 $(PKGDIR)/usr/bin/$(APP)
 	dpkg-deb -b $(PKGDIR) dist/$(DEBNAME)
 	@echo "Created dist/$(DEBNAME). Install with: sudo dpkg -i dist/$(DEBNAME)"

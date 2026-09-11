@@ -34,14 +34,14 @@ func probeAMD() ([]int, error) {
 		if _, err := os.Stat(devicePath); err != nil {
 			continue
 		}
-		if vendor, ok := readSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == amdVendorID {
+		if vendor, ok := shared.ReadSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == amdVendorID {
 			log.Printf("Found AMD card at index %d\n", i)
 			indices = append(indices, i)
 		}
 	}
 	if len(indices) == 0 {
 		// Fallback: check via lspci
-		lspciOut := runShell("lspci | grep -i 'vga\\|3d'")
+		lspciOut := shared.RunShell("lspci | grep -i 'vga\\|3d'")
 		if strings.Contains(strings.ToLower(lspciOut), "advanced micro devices") ||
 			strings.Contains(strings.ToLower(lspciOut), "amd") {
 			log.Println("Found AMD card via lspci (fallback)")
@@ -70,7 +70,7 @@ func resolvePCIDevice(cardIndex int) string {
 // the device portion (see cleanGPUName).
 func getGPUName(cardIndex int) string {
 	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
-		if line := strings.TrimSpace(runShell("lspci -s " + pciAddr)); line != "" {
+		if line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr)); line != "" {
 			return cleanGPUName(line)
 		}
 	}
@@ -183,7 +183,7 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	data[shared.GPUName.Key] = shared.NewHardwareValue(chipsetName, shared.UnknownUnit, shared.Unknown)
 
 	cardPath = filepath.Join(cardPath, "hwmon")
-	hwmonPath := findFirstSubpath(cardPath, "hwmon*")
+	hwmonPath := shared.FindFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found")
 		return shared.HardwareData{Name: chipsetName, Values: data, IsGPU: true}
@@ -196,32 +196,41 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	parseTemperatureValue(&data, hwmonPath, "temp3_input", shared.VRAMTemp.Key)
 
 	// GPU frequency (freq1_input) and convert to MHz
-	gpuFreq := readSysValue(filepath.Join(hwmonPath, "freq1_input"))
-	if gpuFreq != "" {
-		data[shared.GPUFrequency.Key] = shared.NewHardwareValue(parseFrequencyValue(gpuFreq), shared.MHz, shared.Frequency)
+	if gpuFreq, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "freq1_input")); ok {
+		data[shared.GPUFrequency.Key] = shared.NewHardwareValue(shared.ParseFrequencyMHz(gpuFreq), shared.MHz, shared.Frequency)
 	}
 
 	// Memory frequency (freq2_input) and convert to MHz
-	memFreq := readSysValue(filepath.Join(hwmonPath, "freq2_input"))
-	if memFreq != "" {
-		data[shared.VRAMLrequency.Key] = shared.NewHardwareValue(parseFrequencyValue(memFreq), shared.MHz, shared.Frequency)
+	if memFreq, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "freq2_input")); ok {
+		data[shared.VRAMLrequency.Key] = shared.NewHardwareValue(shared.ParseFrequencyMHz(memFreq), shared.MHz, shared.Frequency)
 	}
 
 	vramTotalMB := parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_total"))
-	data[shared.VRAMTotal.Key] = shared.NewHardwareValue(vramTotalMB, shared.Megabyte, shared.Memory)
-	data[shared.VRAMUsed.Key] = shared.NewHardwareValue(parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used")), shared.Megabyte, shared.Memory)
-	data[shared.VRAMVendor.Key] = shared.NewHardwareValue(readSysValue(filepath.Join(devicePath, "mem_info_vram_vendor")), shared.UnknownUnit, shared.Unknown)
+	if vramTotalMB > 0 {
+		data[shared.VRAMTotal.Key] = shared.NewHardwareValue(vramTotalMB, shared.Megabyte, shared.Memory)
+	}
+	if usedMB := parseMemoryValue(filepath.Join(devicePath, "mem_info_vram_used")); usedMB > 0 {
+		data[shared.VRAMUsed.Key] = shared.NewHardwareValue(usedMB, shared.Megabyte, shared.Memory)
+	}
+	if vendor, ok := shared.ReadSysFile(filepath.Join(devicePath, "mem_info_vram_vendor")); ok && vendor != "" {
+		data[shared.VRAMVendor.Key] = shared.NewHardwareValue(vendor, shared.UnknownUnit, shared.Unknown)
+	}
 
 	// Refine the generic chipset label into a specific product name using the
 	// measured VRAM size (e.g. Navi 31 -> Radeon RX 7900 XT vs XTX).
 	gpuName := disambiguateGPUName(chipsetName, vramTotalMB)
 	data[shared.GPUName.Key] = shared.NewHardwareValue(gpuName, shared.UnknownUnit, shared.Unknown)
 
-	data[shared.GPUUsage.Key] = shared.NewHardwareValue(parseGPUUsage(readSysValue(filepath.Join(devicePath, "gpu_busy_percent"))), shared.Percent, shared.Usage)
-	data[shared.GPUPowerMax.Key] = shared.NewHardwareValue(parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_cap_max")), 1000000), shared.Watt, shared.Power)
-	data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(parsePowerValue(readSysValue(filepath.Join(hwmonPath, "power1_average")), 1000000), shared.Watt, shared.Power)
-	fanSpeed := readSysValue(filepath.Join(hwmonPath, "fan1_input"))
-	if fanSpeed != "0" && fanSpeed != "" {
+	if busy, ok := shared.ReadSysFile(filepath.Join(devicePath, "gpu_busy_percent")); ok {
+		data[shared.GPUUsage.Key] = shared.NewHardwareValue(parseGPUUsage(busy), shared.Percent, shared.Usage)
+	}
+	if cap, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "power1_cap_max")); ok {
+		data[shared.GPUPowerMax.Key] = shared.NewHardwareValue(shared.ParsePower(cap, 1000000), shared.Watt, shared.Power)
+	}
+	if avg, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "power1_average")); ok {
+		data[shared.GPUPowerAvg.Key] = shared.NewHardwareValue(shared.ParsePower(avg, 1000000), shared.Watt, shared.Power)
+	}
+	if fanSpeed, ok := shared.ReadSysFile(filepath.Join(hwmonPath, "fan1_input")); ok && fanSpeed != "0" {
 		data[shared.FanSpeed.Key] = shared.NewHardwareValue(fanSpeed, shared.RPM, shared.Frequency)
 	}
 
@@ -256,71 +265,37 @@ func GetAllInformations() []shared.HardwareData {
 	return result
 }
 
-func findFirstSubpath(basePath string, pattern string) string {
-	matches, _ := filepath.Glob(filepath.Join(basePath, pattern))
-	if len(matches) > 0 {
-		return matches[0]
-	}
-	return ""
-}
-
-func readSysValue(path string) string {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("Error reading %s: %v\n", path, err)
-		return "0"
-	}
-	return strings.TrimSpace(string(content))
-}
-
-func readSysFile(path string) (string, bool) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(string(content)), true
-}
-
+// parseTemperatureValue records a millidegree-Celsius hwmon sensor as degrees
+// Celsius. The sensor is skipped entirely when its file is absent, so that
+// boards without a given sensor do not report a bogus 0 C reading.
 func parseTemperatureValue(data *map[string]shared.HardwareValue, hwmonPath string, fileName string, dataKey ...string) {
-	if val, err := strconv.Atoi(readSysValue(filepath.Join(hwmonPath, fileName))); err == nil {
-		key := shared.GPUTemp.Key
-		if len(dataKey) > 0 {
-			key = dataKey[0]
-		}
-		(*data)[key] = shared.NewHardwareValue(float64(val/1000), shared.Celsius, shared.Temperature)
+	raw, ok := shared.ReadSysFile(filepath.Join(hwmonPath, fileName))
+	if !ok {
+		return
 	}
-}
-
-func parseMemoryValue(path string) float64 {
-	if val, err := strconv.Atoi(readSysValue(path)); err == nil {
-		return float64(val / 1024 / 1024) // Convert KB to MB
-	}
-	return 0
-}
-
-func parsePowerValue(raw string, divisor int) float64 {
-	val, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || val < 0 {
-		log.Printf("Error parsing power value: %v\n", err)
-		return 0
-	}
-	return float64(val / divisor)
-}
-
-func parseFrequencyValue(value string) float64 {
-	if value == "" {
-		return 0
-	}
-
-	freq, err := strconv.ParseFloat(value, 64)
+	val, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Printf("Error parsing frequency value: %v", err)
+		return
+	}
+	key := shared.GPUTemp.Key
+	if len(dataKey) > 0 {
+		key = dataKey[0]
+	}
+	(*data)[key] = shared.NewHardwareValue(float64(val/1000), shared.Celsius, shared.Temperature)
+}
+
+// parseMemoryValue converts a sysfs byte count to megabytes, returning 0 when
+// the file is absent or unparsable.
+func parseMemoryValue(path string) float64 {
+	raw, ok := shared.ReadSysFile(path)
+	if !ok {
 		return 0
 	}
-
-	// Convert Hz to MHz
-	mhz := freq / 1000000
-	return mhz
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return float64(val / 1024 / 1024) // Convert bytes to MB
 }
 
 func parseGPUUsage(value string) float64 {
@@ -334,12 +309,4 @@ func parseGPUUsage(value string) float64 {
 	}
 
 	return -1
-}
-
-func runShell(command string) string {
-	output, err := exec.Command("sh", "-c", command).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
 }
