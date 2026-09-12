@@ -32,27 +32,16 @@ func FindFirstSubpath(basePath, pattern string) string {
 	return ""
 }
 
-// ReadSysFile reads a sysfs file and reports whether it could be read. Callers
-// that need to distinguish "sensor absent" from "sensor reads zero" must use
-// this rather than ReadSysValue.
+// ReadSysFile reads a sysfs file and reports whether it could be read. The ok
+// result is the point: a sensor that is absent must be distinguishable from one
+// that reads zero, otherwise a missing hotspot or power-cap file is reported as
+// a genuine 0 reading.
 func ReadSysFile(path string) (string, bool) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return "", false
 	}
 	return strings.TrimSpace(string(content)), true
-}
-
-// ReadSysValue reads a sysfs file and returns its trimmed contents, logging and
-// returning "0" when the file cannot be read. Prefer ReadSysFile when the
-// absence of the file should suppress the metric entirely.
-func ReadSysValue(path string) string {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		log.Printf("Error reading %s: %v\n", path, err)
-		return "0"
-	}
-	return strings.TrimSpace(string(content))
 }
 
 // ParseFrequencyMHz converts a raw sysfs frequency value in Hz to MHz. It
