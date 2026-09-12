@@ -18,6 +18,10 @@ const (
 	Watt
 	Megabyte
 	RPM
+	// Gigabyte is appended rather than grouped with Megabyte so the existing
+	// unit values keep their numbers. Drive capacities and filesystem sizes are
+	// reported in GB because that is how drives are sold and labelled.
+	Gigabyte
 )
 
 // HardwareValue represents a hardware metric with its value and metadata
@@ -43,8 +47,21 @@ const (
 type HardwareData struct {
 	Name   string
 	Values map[string]HardwareValue
-	IsGPU  bool
-	IsCPU  bool
+}
+
+// HasTelemetry reports whether the data carries any reading beyond its identity
+// fields (name and driver version). Devices that expose no sensors are filtered
+// out with this so they are not rendered as empty entries.
+func (hd HardwareData) HasTelemetry() bool {
+	for key, value := range hd.Values {
+		if key == GPUName.Key || key == GPUDriverVersion.Key {
+			continue
+		}
+		if value.Value != nil && value.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // NewHardwareValue creates a new HardwareValue with proper type conversion

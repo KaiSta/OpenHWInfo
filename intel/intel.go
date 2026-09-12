@@ -1,13 +1,13 @@
 package intel
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
@@ -17,25 +17,12 @@ var sysDir = "/sys"
 // intelVendorID is the PCI vendor ID for Intel devices (0x8086).
 const intelVendorID = "0x8086"
 
-// Available reports whether an Intel graphics card is present on the system.
-func Available() bool {
-	cards, _ := probeIntel()
-	return len(cards) > 0
-}
-
 // probeIntel scans the DRM cards and returns the indices of all Intel cards,
 // identified by their PCI vendor ID.
 func probeIntel() ([]int, error) {
-	var indices []int
-	for i := 0; i < 16; i++ {
-		devicePath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", i))
-		if _, err := os.Stat(devicePath); err != nil {
-			continue
-		}
-		if vendor, ok := shared.ReadSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == intelVendorID {
-			log.Printf("Found Intel card at index %d\n", i)
-			indices = append(indices, i)
-		}
+	indices := shared.ProbeDRMCards(sysDir, intelVendorID)
+	for _, i := range indices {
+		log.Printf("Found Intel card at index %d\n", i)
 	}
 	if len(indices) == 0 {
 		log.Println("No Intel cards found")
@@ -43,22 +30,11 @@ func probeIntel() ([]int, error) {
 	return indices, nil
 }
 
-// resolvePCIDevice reads the symlink at class/drm/cardN/device and returns
-// the PCI address (e.g. "0000:00:02.0"). Empty string on error.
-func resolvePCIDevice(cardIndex int) string {
-	link, err := os.Readlink(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex)))
-	if err != nil {
-		return ""
-	}
-	parts := strings.Split(link, "/")
-	return parts[len(parts)-1]
-}
-
 // getPCIDeviceID reads the PCI device ID (e.g. "0416") of the Intel GPU at the
 // given DRM index directly from sysfs. This is more reliable than parsing lspci
 // output because it does not depend on the pci.ids database being installed.
 func getPCIDeviceID(cardIndex int) string {
-	id, ok := shared.ReadSysFile(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex), "device"))
+	id, ok := shared.ReadSysFile(filepath.Join(shared.DRMCardDevicePath(sysDir, cardIndex), "device"))
 	if !ok {
 		return ""
 	}
@@ -66,75 +42,70 @@ func getPCIDeviceID(cardIndex int) string {
 }
 
 // getGPUName returns a human readable name for the Intel GPU at the given DRM
-// index, preferring a PCI-address-scoped lspci query so that multi-GPU systems
-// get the correct name per card. The PCI device ID is read from sysfs (and/or
-// parsed from the "[8086:xxxx]" marker in the lspci line) and mapped to a
-// specific model name like "Intel HD Graphics 4600". Falls back to glxinfo,
-// which provides renderer strings like "Intel(R) UHD Graphics 770", then to a
-// cleaned-up lspci device name. Handles integrated graphics (i915 driver).
+// index. The PCI device ID from sysfs identifies the model exactly, so that is
+// tried first; multi-GPU systems are handled because the ID is per card. Falls
+// back to glxinfo, which provides renderer strings like "Intel(R) UHD Graphics
+// 770", then to a PCI-scoped lspci query that does carry a product name.
 func getGPUName(cardIndex int) string {
 	deviceID := getPCIDeviceID(cardIndex)
 
-	// Method 1: Direct PCI address query - most reliable for multi-GPU systems.
-	// "-n" includes the 8086:xxxx device ID so it can be mapped to a model name.
-	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
-		line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr + " -n"))
-		// The card index was verified as Intel (vendor 0x8086) by probeIntel, and
-		// "-n" output may contain only IDs without the word "Intel", so match on
-		// the vendor ID instead of a name.
-		if line != "" && regexp.MustCompile(`(?i)\b8086:[0-9a-f]{4}\b`).MatchString(line) {
-			return parseIntelGPUName(line, deviceID)
+	// Method 1: PCI device ID -> marketing name. This is the only method that
+	// names the exact model, and it needs no external command.
+	if model := getIntelDeviceModel(deviceID); model != "" {
+		return model
+	}
+
+	// Method 2: PCI-address-scoped lspci. The query deliberately omits "-n":
+	// the numeric form carries no product name ("00:02.0 0300: 8086:0416"),
+	// while the named form gives "Intel Corporation 4th Gen Core Processor
+	// Integrated Graphics Controller" using the pci.ids database.
+	if pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex); pciAddr != "" {
+		line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr))
+		if line != "" {
+			if name := parseIntelGPUName(line, deviceID); name != "" {
+				return name
+			}
 		}
 	}
 
-	// Method 2: glxinfo provides the most specific model name (e.g. "Intel(R) UHD Graphics 770").
-	// Only trust it when it actually mentions Intel so hybrid systems do not end up
-	// naming a discrete GPU (e.g. NVIDIA) after an integrated card.
-	line := shared.RunShell("glxinfo | grep 'OpenGL renderer'")
-	if line != "" {
-		parts := strings.Split(line, ":")
-		if len(parts) > 1 && strings.Contains(strings.ToLower(parts[1]), "intel") {
-			return parseIntelGPUName(strings.TrimSpace(parts[1]), deviceID)
-		}
+	// Methods 3+: each source yields a candidate string, and the first one that
+	// parses into a usable name wins. glxinfo comes first because it reports the
+	// most specific string (e.g. "Intel(R) UHD Graphics 770"); it is only trusted
+	// when it mentions Intel, so hybrid systems do not end up naming a discrete
+	// GPU (an NVIDIA card) after an integrated one.
+	var candidates []string
+	glxinfo := shared.RunShell("glxinfo | grep 'OpenGL renderer'")
+	if parts := strings.Split(glxinfo, ":"); len(parts) > 1 &&
+		strings.Contains(strings.ToLower(parts[1]), "intel") {
+		candidates = append(candidates, strings.TrimSpace(parts[1]))
 	}
 
-	// Method 3: Check if i915 driver is loaded (indicates Intel GPU present).
-	// This handles integrated graphics that don't have a separate DRM device path.
-	if _, err := os.Stat("/sys/module/i915"); err == nil {
-		// Try lspci for VGA devices with Intel ("-n" exposes the [8086:xxxx] ID).
-		line = shared.RunShell("lspci -nnk | grep -i 'vga' | grep -i intel")
-		if line != "" {
-			return parseIntelGPUName(line, deviceID)
-		}
-
-		// Fallback: check glxinfo again (handles both discrete and integrated GPUs).
-		line = shared.RunShell("glxinfo 2>/dev/null | grep 'OpenGL renderer' || lspci -nnk | grep -i intel")
-		if line != "" {
-			return parseIntelGPUName(line, deviceID)
-		}
-
-		// Last resort: generic Intel GPU detection.
-		name := firstNonEmpty(
-			shared.RunShell("lspci | grep -i 'intel'"),
-			shared.RunShell("glxinfo 2>/dev/null | grep renderer"),
+	// The i915 check covers integrated graphics without a usable DRM device
+	// path. It is not a requirement: Arc cards run on either i915 or xe.
+	if _, err := os.Stat(filepath.Join(sysDir, "module/i915")); err == nil {
+		candidates = append(candidates,
+			shared.RunShell("lspci -nnk | grep -i 'vga' | grep -i intel"),
+			shared.RunShell("lspci -nnk | grep -iE 'vga|3d|display' | grep -i intel"),
 		)
-		if name != "" {
-			return parseIntelGPUName(name, deviceID)
-		}
-
-		return "Intel UHD Graphics" // Generic fallback for integrated GPUs without specific info
 	}
 
-	// Method 4: Generic lspci intel grep as last resort (handles some edge cases).
-	name := firstNonEmpty(
-		shared.RunShell("lspci | grep -i 'intel'"),
-		shared.RunShell("glxinfo | grep -i renderer"),
+	// Each query is filtered to display devices: a bare `lspci | grep -i intel`
+	// matches every Intel device on the system, and naming a GPU after the whole
+	// device list is worse than admitting the name is unknown.
+	candidates = append(candidates,
+		shared.RunShell("lspci | grep -iE 'vga|3d|display' | grep -i intel"),
+		shared.RunShell("glxinfo 2>/dev/null | grep -i renderer"),
 	)
-	if name != "" {
-		return parseIntelGPUName(name, deviceID)
+
+	for _, candidate := range candidates {
+		if name := parseIntelGPUName(firstLine(candidate), deviceID); name != "" {
+			return name
+		}
 	}
 
-	return "Intel GPU"
+	// The card is known to be Intel (probeIntel matched the vendor) but nothing
+	// could name it. "Intel Graphics" is vague; a wrong model name is worse.
+	return "Intel Graphics"
 }
 
 // parseIntelGPUName extracts a human readable Intel GPU model from an lspci
@@ -174,57 +145,59 @@ func parseIntelGPUName(line string, deviceIDs ...string) string {
 		return strings.TrimSpace(strings.ReplaceAll(cleaned, "(R)", ""))
 	}
 
-	return cleaned
+	// Anything left is only a name if it reads like one. The numeric lspci
+	// form ("00:02.0 0300: 8086:0416 (rev 06)") is what the collector queries,
+	// and returning it unparsed would show a card name of "00:02.0 0300:
+	// 8086:0416". Reporting "" instead lets getGPUName try a query that does
+	// carry a name.
+	if looksLikeDeviceName(cleaned) {
+		return cleaned
+	}
+	return ""
 }
 
-// getIntelDeviceModel maps Intel PCI device IDs to their human-readable model names.
+// firstLine returns the first non-empty line of s, trimmed. A card name is one
+// line: the fallback queries can still match more than one device, and the first
+// line is the best guess among them.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// hexLetters are the letters that also occur in hex numbers, so their presence
+// in a string proves nothing about it being a name.
+const hexLetters = "abcdefABCDEF"
+
+// looksLikeDeviceName reports whether text could plausibly be a product name
+// rather than raw PCI identifiers. The numeric lspci form
+// ("00:02.0 0300: 8086:0416") is made only of digits, separators and hex
+// letters, so a single letter from outside a-f means real text was found.
+// Length or word counts cannot be used here: "beef" is four letters and still
+// just a device ID.
+func looksLikeDeviceName(text string) bool {
+	return strings.ContainsFunc(text, func(r rune) bool {
+		return unicode.IsLetter(r) && !strings.ContainsRune(hexLetters, r)
+	})
+}
+
+// getIntelDeviceModel maps an Intel PCI device ID to its model name, or returns
+// "" when the ID is not a known graphics device. The tables live in pci_ids.go
+// (data, generated from pci.ids); this function only normalises the lookup, so
+// that sysfs ("0x0416") and lspci ("0416") forms both resolve.
 func getIntelDeviceModel(deviceID string) string {
 	deviceID = strings.ToUpper(strings.TrimSpace(deviceID))
+	deviceID = strings.TrimPrefix(deviceID, "0X")
 	if deviceID == "" {
 		return ""
 	}
-	mappings := map[string]string{
-		// Discrete Arc GPUs:
-		"9A49": "Intel Arc A380",
-		"7D2B": "Intel Arc A580",
-		"61ED": "Intel Arc A770",
-		"61E1": "Intel Arc A750",
-		"61AE": "Intel Arc A310",
-		"9BC4": "Intel Arc B580",
-		"9BC2": "Intel Arc B570",
-		"9BC6": "Intel Arc B550",
-		"7CFD": "Intel Arc A310M (mobile)",
-		"7DAA": "Intel Arc A380M (mobile)",
-		// Iris Xe:
-		"63E0": "Intel Iris Xe Graphics G4 (Tiger Lake)",
-		"63C8": "Intel Iris Xe Graphics G5 (Alder Lake-P)",
-		"9A26": "Intel Iris Xe Graphics G7 (Tiger Lake-HX)",
-		// Kaby Lake / Skylake UHD:
-		"591C": "Intel UHD Graphics 630",
-		"591B": "Intel UHD Graphics P630",
-		"5912": "Intel UHD Graphics 615",
-		"5916": "Intel UHD Graphics 617",
-		"5915": "Intel UHD Graphics 612",
-		"5914": "Intel UHD Graphics P600",
-		// Haswell HD:
-		"0C0B": "Intel HD Graphics 510",
-		"0C0A": "Intel HD Graphics 530",
-		"0C09": "Intel HD Graphics 520",
-		"0C08": "Intel HD Graphics 515",
-		"0C07": "Intel HD Graphics 5500",
-		"0416": "Intel HD Graphics 4600",
-		"0412": "Intel HD Graphics 4600",
-		"0411": "Intel HD Graphics 4400",
-		// Ivy Bridge:
-		"0166": "Intel HD Graphics 4000",
-		"0162": "Intel HD Graphics 4000",
-		"0152": "Intel HD Graphics 4000",
-		"0156": "Intel Iris",
-		// Sandy Bridge / Atom:
-		"0134": "Intel HD Graphics (Sandy Bridge)",
-		"012E": "Intel HD Graphics",
+	if model, ok := intelGraphicsModels[deviceID]; ok {
+		return model
 	}
-	return mappings[deviceID]
+	return intelCodenameOnlyModels[deviceID]
 }
 
 // cleanPCIDeviceName strips the PCI address/class prefix, vendor/device ID and
@@ -237,24 +210,6 @@ func cleanPCIDeviceName(name string) string {
 	// Strip the leading "XX:YY.Z VGA compatible controller [NNNN]:" prefix.
 	name = regexp.MustCompile(`^[^ ]+\s+VGA compatible controller(?:\s*\[\d{4}\])?:?\s*`).ReplaceAllString(name, "")
 	return strings.TrimSpace(name)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func openglRenderer() string {
-	line := shared.RunShell("glxinfo | grep 'OpenGL renderer'")
-	parts := strings.Split(line, ":")
-	if len(parts) > 1 {
-		return strings.TrimSpace(parts[1])
-	}
-	return ""
 }
 
 // getDriverVersion returns the i915 driver version (the kernel version the
@@ -283,7 +238,7 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	hwmonPath := shared.FindFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found for Intel card")
-		return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
+		return shared.HardwareData{Name: gpuName, Values: data}
 	}
 
 	// Temperatures (i915 reports millidegrees Celsius).
@@ -310,36 +265,36 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 		}
 	}
 
-	return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
-}
-
-// GetInformations collects the hardware metrics available for the first Intel GPU.
-func GetInformations() shared.HardwareData {
-	all := GetAllInformations()
-	if len(all) == 0 {
-		return shared.HardwareData{Name: "Intel GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true}
-	}
-	return all[0]
+	return shared.HardwareData{Name: gpuName, Values: data}
 }
 
 // GetAllInformations returns the information for every Intel card on the system.
+// It returns nil when no card is present, so callers can treat an empty result
+// as "vendor unavailable" without probing a second time. Cards that expose no
+// sensors (for example an integrated GPU whose hwmon directory is absent) are
+// omitted rather than reported as empty entries.
 func GetAllInformations() []shared.HardwareData {
 	cards, err := probeIntel()
 	if err != nil || len(cards) == 0 {
-		log.Println("Returning default info due to no Intel cards found")
-		return []shared.HardwareData{
-			{Name: "Intel GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true},
-		}
+		log.Println("No Intel cards to collect information for")
+		return nil
 	}
 
 	var result []shared.HardwareData
 	for _, cardIndex := range cards {
-		cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex))
+		cardPath := shared.DRMCardDevicePath(sysDir, cardIndex)
 		log.Printf("Collecting information for Intel card %d\n", cardIndex)
-		result = append(result, collectGPUDataForCard(cardPath, cardIndex))
+		data := collectGPUDataForCard(cardPath, cardIndex)
+		if !data.HasTelemetry() {
+			log.Printf("Skipping Intel card %d: no readable sensors", cardIndex)
+			continue
+		}
+		result = append(result, data)
 	}
 	return result
-} // addTemperature records a millidegree-Celsius i915 hwmon sensor as degrees
+}
+
+// addTemperature records a millidegree-Celsius i915 hwmon sensor as degrees
 // Celsius, skipping the metric entirely when the sensor file is absent.
 func addTemperature(data *map[string]shared.HardwareValue, hwmonPath string, fileName string, key string) {
 	raw, ok := shared.ReadSysFile(filepath.Join(hwmonPath, fileName))

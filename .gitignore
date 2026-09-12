@@ -22,9 +22,8 @@ _.o
 # Go workspace file
 go.work
 
-# Go modules
-go.mod
-go.sum
+# NOTE: go.mod and go.sum are deliberately NOT ignored. This project is a Go
+# module and both files must be committed for the build to be reproducible.
 
 # Dependency directories (remove the comment below to include it)
 vendor/
@@ -69,6 +68,12 @@ bin/
 dist/
 build/
 out/
+
+# Built application binary (make build writes it to the repo root). Build
+# artifacts are not tracked: the binary churns on every build and is rebuilt by
+# `make build` / `make package`.
+/OpenHWInfo
+/OpenHWInfo.so
 
 # Documentation artifacts
 docs/_build/

@@ -62,13 +62,12 @@ func TestGetInformationsWithAMDCard(t *testing.T) {
 		}
 	}
 
-	// Run Available() check to ensure it detects the mock card
-	if !Available() {
-		t.Error("expected AMD card to be available under mock sysDir")
-	}
-
 	// Get informations
-	info := GetInformations()
+	gpus := GetAllInformations()
+	if len(gpus) != 1 {
+		t.Fatalf("expected exactly 1 AMD GPU, got %d", len(gpus))
+	}
+	info := gpus[0]
 
 	// 1. Verify Frequency/Clock values are >= 0 and not -1
 	gpuFreqVal, ok := info.Values[shared.GPUFrequency.Key]

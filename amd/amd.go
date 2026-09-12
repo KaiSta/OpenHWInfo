@@ -1,10 +1,8 @@
 package amd
 
 import (
-	"fmt"
 	"log"
 	"math"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -19,49 +17,22 @@ var sysDir = "/sys"
 // amdVendorID is the PCI vendor ID for AMD devices (0x1002).
 const amdVendorID = "0x1002"
 
-// Available reports whether an AMD graphics card is present on the system.
-func Available() bool {
-	cards, _ := probeAMD()
-	return len(cards) > 0
-}
-
 // probeAMD scans the DRM cards and returns the indices of all AMD cards,
 // identified by their PCI vendor ID.
+//
+// There is deliberately no lspci fallback that guesses an index. If a card's
+// vendor file is unreadable then its hwmon directory is unreachable too, so a
+// guessed index can only ever read some other card's sensors while labelling
+// them AMD. An unreachable card yields no card, which is the honest answer.
 func probeAMD() ([]int, error) {
-	var indices []int
-	for i := 0; i < 16; i++ {
-		devicePath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", i))
-		if _, err := os.Stat(devicePath); err != nil {
-			continue
-		}
-		if vendor, ok := shared.ReadSysFile(filepath.Join(devicePath, "vendor")); ok && vendor == amdVendorID {
-			log.Printf("Found AMD card at index %d\n", i)
-			indices = append(indices, i)
-		}
+	indices := shared.ProbeDRMCards(sysDir, amdVendorID)
+	for _, i := range indices {
+		log.Printf("Found AMD card at index %d\n", i)
 	}
 	if len(indices) == 0 {
-		// Fallback: check via lspci
-		lspciOut := shared.RunShell("lspci | grep -i 'vga\\|3d'")
-		if strings.Contains(strings.ToLower(lspciOut), "advanced micro devices") ||
-			strings.Contains(strings.ToLower(lspciOut), "amd") {
-			log.Println("Found AMD card via lspci (fallback)")
-			indices = append(indices, 0)
-		} else {
-			log.Println("No AMD cards found")
-		}
+		log.Println("No AMD cards found")
 	}
 	return indices, nil
-}
-
-// resolvePCIDevice reads the symlink at class/drm/cardN/device and returns
-// the PCI address (e.g. "0000:0c:00.0"). Empty string on error.
-func resolvePCIDevice(cardIndex int) string {
-	link, err := os.Readlink(filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex)))
-	if err != nil {
-		return ""
-	}
-	parts := strings.Split(link, "/")
-	return parts[len(parts)-1]
 }
 
 // getGPUName returns a human-readable chipset/product label for the card at the
@@ -69,7 +40,7 @@ func resolvePCIDevice(cardIndex int) string {
 // systems get the correct name per card. The raw lspci line is reduced to just
 // the device portion (see cleanGPUName).
 func getGPUName(cardIndex int) string {
-	if pciAddr := resolvePCIDevice(cardIndex); pciAddr != "" {
+	if pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex); pciAddr != "" {
 		if line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr)); line != "" {
 			return cleanGPUName(line)
 		}
@@ -186,7 +157,7 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	hwmonPath := shared.FindFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
 		log.Println("No hwmon path found")
-		return shared.HardwareData{Name: chipsetName, Values: data, IsGPU: true}
+		return shared.HardwareData{Name: chipsetName, Values: data}
 	}
 
 	devicePath := filepath.Join(hwmonPath, "device")
@@ -234,33 +205,30 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 		data[shared.FanSpeed.Key] = shared.NewHardwareValue(fanSpeed, shared.RPM, shared.Frequency)
 	}
 
-	return shared.HardwareData{Name: gpuName, Values: data, IsGPU: true}
-}
-
-// GetInformations collects the hardware metrics available for the first AMD GPU.
-func GetInformations() shared.HardwareData {
-	all := GetAllInformations()
-	if len(all) == 0 {
-		return shared.HardwareData{Name: "AMD GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true}
-	}
-	return all[0]
+	return shared.HardwareData{Name: gpuName, Values: data}
 }
 
 // GetAllInformations returns the information for every AMD card on the system.
+// It returns nil when no card is present, so callers can treat an empty result
+// as "vendor unavailable" without probing a second time. Cards that expose no
+// sensors at all are omitted rather than reported as empty entries.
 func GetAllInformations() []shared.HardwareData {
 	cards, err := probeAMD()
 	if err != nil || len(cards) == 0 {
-		log.Println("Returning default info due to no AMD cards found")
-		return []shared.HardwareData{
-			{Name: "AMD GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true},
-		}
+		log.Println("No AMD cards to collect information for")
+		return nil
 	}
 
 	var result []shared.HardwareData
 	for _, cardIndex := range cards {
-		cardPath := filepath.Join(sysDir, fmt.Sprintf("class/drm/card%d/device", cardIndex))
+		cardPath := shared.DRMCardDevicePath(sysDir, cardIndex)
 		log.Printf("Collecting information for AMD card %d\n", cardIndex)
-		result = append(result, collectGPUDataForCard(cardPath, cardIndex))
+		data := collectGPUDataForCard(cardPath, cardIndex)
+		if !data.HasTelemetry() {
+			log.Printf("Skipping AMD card %d: no readable sensors", cardIndex)
+			continue
+		}
+		result = append(result, data)
 	}
 	return result
 }

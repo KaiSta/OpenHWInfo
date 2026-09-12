@@ -26,7 +26,7 @@ func GetInformations() shared.HardwareData {
 	err := probeCmd.Run()
 	if probeOut.String() == "" {
 		log.Println("CPU probe failed, please install lm-sensors package")
-		return shared.HardwareData{Name: "", Values: make(map[string]shared.HardwareValue), IsCPU: true}
+		return shared.HardwareData{Name: "", Values: make(map[string]shared.HardwareValue)}
 	}
 
 	cpuinfos, _ := os.ReadFile("/proc/cpuinfo")
@@ -40,7 +40,7 @@ func GetInformations() shared.HardwareData {
 	err = cmd.Run()
 	if err != nil {
 		log.Printf("Error reading sensor data: %v\n", err)
-		hwData := shared.HardwareData{Name: name, Values: make(map[string]shared.HardwareValue), IsCPU: true}
+		hwData := shared.HardwareData{Name: name, Values: make(map[string]shared.HardwareValue)}
 		for k, v := range cpus {
 			hwData.Values[k] = shared.NewHardwareValue(v, shared.UnknownUnit, shared.Unknown)
 		}
@@ -49,7 +49,7 @@ func GetInformations() shared.HardwareData {
 
 	temps := parseSensorOutput(strings.Split(out.String(), "\n"))
 
-	hwData := shared.HardwareData{Name: name, Values: make(map[string]shared.HardwareValue), IsCPU: true}
+	hwData := shared.HardwareData{Name: name, Values: make(map[string]shared.HardwareValue)}
 
 	// Convert cpus map to HardwareValue format
 	for k, v := range cpus {
@@ -250,12 +250,4 @@ func setTemperature(temps map[string]interface{}, key, raw string) {
 		return
 	}
 	temps[key] = strings.TrimSpace(raw)
-}
-
-// mergeMaps copies all entries from m2 into m1 and returns m1.
-func mergeMaps(m1, m2 map[string]string) map[string]string {
-	for k, v := range m2 {
-		m1[k] = v
-	}
-	return m1
 }

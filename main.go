@@ -11,8 +11,10 @@ import (
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
 	"github.com/KaiSta/OpenHWInfo/intel"
+	"github.com/KaiSta/OpenHWInfo/mainboard"
 	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/KaiSta/OpenHWInfo/shared"
+	"github.com/KaiSta/OpenHWInfo/storage"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	assetserver "github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -30,8 +32,11 @@ var assets embed.FS
 //go:embed icons/icon-512.png
 var appIcon []byte
 
-// GPUView holds the data for a single GPU in the frontend.
-type GPUView struct {
+// DeviceView holds the data for one card in the frontend: a GPU, a drive or the
+// mainboard. They share a shape because they share a presentation — a name for
+// the card title, and a metric table whose rows depend on the device, so the
+// frontend renders all three with the same code.
+type DeviceView struct {
 	Name      string
 	Keys      []shared.KeyTemplate
 	Values    map[string]string
@@ -41,10 +46,14 @@ type GPUView struct {
 
 type Data struct {
 	CpuKeys      []shared.KeyTemplate
-	GpuViews     []GPUView
+	GpuViews     []DeviceView
+	DiskViews    []DeviceView
 	CpuValues    map[string]string
 	CpuMinValues map[string]string
 	CpuMaxValues map[string]string
+	// Board is nil when the board reports nothing at all (no SMBIOS and no board
+	// sensors), which the frontend renders as no card.
+	Board *DeviceView
 }
 
 // cpuKeyTemplates assembles the CPU rows in display order: identity fields, one
@@ -99,6 +108,47 @@ func numericSuffixes(values map[string]shared.HardwareValue, prefix string) []in
 	return indices
 }
 
+// boardKeyTemplates assembles the mainboard rows in display order: the identity
+// and firmware fields, then one row per temperature and one per fan. Both sensor
+// families are generated from the collected values, because how many there are
+// depends on the board's ACPI zones and its Super I/O chip.
+func boardKeyTemplates(values map[string]shared.HardwareValue) []shared.KeyTemplate {
+	templates := []shared.KeyTemplate{
+		shared.BoardVendor,
+		shared.BoardModel,
+		shared.BoardVersion,
+		shared.BoardSerial,
+		shared.BoardBIOSVersion,
+		shared.BoardBIOSDate,
+	}
+	templates = append(templates, labelledBoardTemplates(values, "board.temp", "board.tempLabel", "Temperature %d")...)
+	templates = append(templates, labelledBoardTemplates(values, "board.fan", "board.fanLabel", "Fan %d Speed")...)
+	return templates
+}
+
+// labelledBoardTemplates returns one template per collected key of the form
+// keyPrefix + <number>, ordered by that number. The row label is the sensor's
+// own name, which the collector stores under labelPrefix + <number> because only
+// it knows what the number means ("SYSTIN", "acpitz", "Chassis Fan",
+// "Composite" for an NVMe drive). Those label keys are data rather than metrics:
+// no template names them, so they never reach the table.
+func labelledBoardTemplates(values map[string]shared.HardwareValue, keyPrefix, labelPrefix, fallbackFormat string) []shared.KeyTemplate {
+	var templates []shared.KeyTemplate
+	for _, index := range numericSuffixes(values, keyPrefix) {
+		label := fmt.Sprintf(fallbackFormat, index)
+		if stored, ok := values[labelPrefix+strconv.Itoa(index)]; ok {
+			if name, ok := stored.Value.(string); ok && name != "" {
+				label = name
+			}
+		}
+		templates = append(templates, shared.KeyTemplate{
+			Label: label,
+			Key:   keyPrefix + strconv.Itoa(index),
+		})
+	}
+	return templates
+}
+
 var gpuTemplates = []shared.KeyTemplate{
 	shared.GPUName,
 	shared.GPUDriverVersion,
@@ -116,16 +166,32 @@ var gpuTemplates = []shared.KeyTemplate{
 	shared.FanSpeed,
 }
 
-// gpuHistoryKey builds a unique history key for a metric belonging to a
-// specific GPU.  The prefix ensures that min/max tracking for GPU 0 does not
-// interfere with GPU 1, etc.
-func gpuHistoryKey(gpuIndex int, metricKey string) string {
-	return fmt.Sprintf("gpu%d.%s", gpuIndex, metricKey)
+// diskTemplates are the fixed rows of a drive card. The per-drive temperature
+// rows ("disk.tempN") are generated from the collected values, because an NVMe
+// drive reports a composite sensor plus one per temperature sensor.
+var diskTemplates = []shared.KeyTemplate{
+	shared.DiskModel,
+	shared.DiskSerial,
+	shared.DiskFirmware,
+	shared.DiskMedium,
+	shared.DiskSize,
+	shared.DiskFSTotal,
+	shared.DiskFSUsed,
+	shared.DiskFSFree,
+}
+
+// diskKeyTemplates assembles a drive card's rows: its identity and size, how
+// full its filesystems are, then its temperature sensors.
+func diskKeyTemplates(values map[string]shared.HardwareValue) []shared.KeyTemplate {
+	templates := append([]shared.KeyTemplate{}, diskTemplates...)
+	return append(templates, labelledBoardTemplates(values, "disk.temp", "disk.tempLabel", "Drive Temperature %d")...)
 }
 
 // Global maps to track historical values for min/max calculations
 var cpuHistory = make(map[string][]float64)
 var gpuHistory = make(map[string][]float64)
+var diskHistory = make(map[string][]float64)
+var boardHistory = make(map[string][]float64)
 
 // App is the main application struct.
 type App struct {
@@ -153,78 +219,40 @@ func (a *App) GetData() Data {
 	// Collect CPU data
 	cpuData := cpuinfo.GetInformations()
 
-	// Collect GPU data from all available sources
+	// Collect GPU data from every vendor. Each vendor probes once and returns nil
+	// when it has nothing to report, so there is no separate availability check
+	// (which would run lspci or scan sysfs a second time on every poll).
 	var allGPUs []shared.HardwareData
-	usedGPU := false
-
-	if nvidia.Available() {
-		allGPUs = nvidia.GetAllInformations()
-		usedGPU = true
-	}
-	if intel.Available() {
-		allGPUs = append(allGPUs, intel.GetAllInformations()...)
-		usedGPU = true
-	}
-	if amd.Available() {
-		allGPUs = append(allGPUs, amd.GetAllInformations()...)
-		usedGPU = true
-	}
+	allGPUs = append(allGPUs, nvidia.GetAllInformations()...)
+	allGPUs = append(allGPUs, intel.GetAllInformations()...)
+	allGPUs = append(allGPUs, amd.GetAllInformations()...)
 
 	// If no GPU was found, add a placeholder
-	if !usedGPU {
-		allGPUs = append(allGPUs, shared.HardwareData{Name: "No GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true})
+	if len(allGPUs) == 0 {
+		allGPUs = append(allGPUs, shared.HardwareData{Name: "No GPU", Values: make(map[string]shared.HardwareValue)})
 	}
 
-	// Build per-GPU view data
-	var gpuViews []GPUView
+	// Build per-GPU view data. The history is scoped per card so that GPU 0's
+	// range never mixes with GPU 1's.
+	var gpuViews []DeviceView
 	for gpuIdx, gpuData := range allGPUs {
-		// Filter keys to only show those with available values
-		var filteredKeys []shared.KeyTemplate
-		for _, key := range gpuTemplates {
-			if value, exists := gpuData.Values[key.Key]; exists && value.Value != "" {
-				filteredKeys = append(filteredKeys, key)
-			}
+		gpuViews = append(gpuViews, deviceView(gpuData, gpuTemplates, gpuHistory, fmt.Sprintf("gpu%d.", gpuIdx)))
+	}
+
+	// Each drive is its own card as well, and keeps its own history for the same
+	// reason: two drives have no shared range.
+	var diskViews []DeviceView
+	for diskIdx, diskData := range storage.GetInformations() {
+		diskViews = append(diskViews, deviceView(diskData, diskKeyTemplates(diskData.Values), diskHistory, fmt.Sprintf("disk%d.", diskIdx)))
+	}
+
+	// The mainboard is a single device, so its history needs no prefix.
+	var board *DeviceView
+	if boardData := mainboard.GetInformations(); len(boardData.Values) > 0 {
+		view := deviceView(boardData, boardKeyTemplates(boardData.Values), boardHistory, "")
+		if len(view.Keys) > 0 {
+			board = &view
 		}
-
-		// Build string values map
-		stringValues := make(map[string]string)
-		for key, value := range gpuData.Values {
-			stringValues[key] = formatValue(value)
-		}
-
-		// Build a subset of values that use prefixed keys for per-GPU history tracking.
-		prefixedValues := make(map[string]shared.HardwareValue)
-		for k, v := range gpuData.Values {
-			if v.IsNumericType() {
-				prefixedKey := gpuHistoryKey(gpuIdx, k)
-				prefixedValues[prefixedKey] = v
-			}
-		}
-
-		// Calculate min/max using prefixed history keys (so each GPU's
-		// history is tracked independently), then remap them back to the
-		// plain metric keys that the frontend uses for lookups.
-		minValues, maxValues := updateHistoryAndCalculateMinMax(gpuHistory, prefixedValues)
-
-		remap := func(src map[string]string) map[string]string {
-			dst := make(map[string]string, len(src))
-			for k, v := range src {
-				if strings.HasPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".") {
-					dst[strings.TrimPrefix(k, "gpu"+fmt.Sprint(gpuIdx)+".")] = v
-				}
-			}
-			return dst
-		}
-		minValues = remap(minValues)
-		maxValues = remap(maxValues)
-
-		gpuViews = append(gpuViews, GPUView{
-			Name:      gpuData.Name,
-			Keys:      filteredKeys,
-			Values:    stringValues,
-			MinValues: minValues,
-			MaxValues: maxValues,
-		})
 	}
 
 	// Filter CPU keys to only show those with available values
@@ -247,10 +275,56 @@ func (a *App) GetData() Data {
 	return Data{
 		CpuKeys:      filteredCpuKeys,
 		GpuViews:     gpuViews,
+		DiskViews:    diskViews,
 		CpuValues:    cpuStringValues,
 		CpuMinValues: cpuMinValues,
 		CpuMaxValues: cpuMaxValues,
+		Board:        board,
 	}
+}
+
+// deviceView turns one device's collected values into the view the frontend
+// renders: the templates that carry a value, the values as display strings, and
+// the min/max ranges from that device's own value history. historyPrefix scopes
+// the history to the device ("gpu0.", "disk1."), so two cards of the same kind
+// never share a range; it is empty for the mainboard, of which there is one.
+func deviceView(data shared.HardwareData, templates []shared.KeyTemplate, history map[string][]float64, historyPrefix string) DeviceView {
+	view := DeviceView{Name: data.Name}
+
+	// Keep only the rows that carry a value: a device does not have to report
+	// every field (a drive with no serial, a card with no hotspot sensor), and an
+	// absent reading must not become an empty row.
+	for _, key := range templates {
+		if value, exists := data.Values[key.Key]; exists && value.Value != "" {
+			view.Keys = append(view.Keys, key)
+		}
+	}
+
+	view.Values = make(map[string]string, len(data.Values))
+	for key, value := range data.Values {
+		view.Values[key] = formatValue(value)
+	}
+
+	// Only numeric values are tracked, and only under this device's prefix, so
+	// that the ranges the frontend displays are the device's own.
+	scoped := make(map[string]shared.HardwareValue, len(data.Values))
+	for key, value := range data.Values {
+		if value.IsNumericType() {
+			scoped[historyPrefix+key] = value
+		}
+	}
+	minValues, maxValues := updateHistoryAndCalculateMinMax(history, scoped)
+
+	view.MinValues = make(map[string]string, len(minValues))
+	for key, value := range minValues {
+		view.MinValues[strings.TrimPrefix(key, historyPrefix)] = value
+	}
+	view.MaxValues = make(map[string]string, len(maxValues))
+	for key, value := range maxValues {
+		view.MaxValues[strings.TrimPrefix(key, historyPrefix)] = value
+	}
+
+	return view
 }
 
 // updateHistoryAndCalculateMinMax updates the history of values and calculates min/max

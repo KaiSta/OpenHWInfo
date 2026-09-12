@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
@@ -212,6 +214,338 @@ func TestCPUKeyTemplatesNoClocksOnNonX86(t *testing.T) {
 	if got := keysOfTemplates(templates); !reflect.DeepEqual(got, want) {
 		t.Errorf("template keys = %v; want %v", got, want)
 	}
+}
+
+// TestCPUKeyTemplatesMatchCollectorKeyContract encodes what the frontend does
+// with each key family the collector emits. Two real bugs lived here: a metric
+// the frontend renders (cpu.temp) was collected under a key no template named,
+// so it silently never displayed, and the topology keys (cpu.coreOfN) must
+// travel in the values map — the per-core grid reads them to attribute SMT
+// siblings — but must never become table rows.
+func TestCPUKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
+	values := make(map[string]shared.HardwareValue)
+	for _, key := range []string{"cpu.vendorID", "cpu.brand", "cpu.temp", "cpu.pch"} {
+		values[key] = shared.NewHardwareValue("x", shared.UnknownUnit, shared.Unknown)
+	}
+	for i := 0; i < 8; i++ {
+		values[fmt.Sprintf("cpu.clock%d", i)] = shared.NewHardwareValue(float64(3400+i), shared.MHz, shared.Frequency)
+		values[fmt.Sprintf("cpu.coreOf%d", i)] = shared.NewHardwareValue(float64(i%4), shared.UnknownUnit, shared.Unknown)
+	}
+	for i := 0; i < 4; i++ {
+		values[fmt.Sprintf("cpu.coreTemp%d", i)] = shared.NewHardwareValue(float64(45+i), shared.Celsius, shared.Temperature)
+	}
+
+	templates := cpuKeyTemplates(values)
+
+	present := make(map[string]bool, len(templates))
+	for _, tpl := range templates {
+		present[tpl.Key] = true
+		if strings.Contains(tpl.Key, "coreOf") {
+			t.Errorf("topology key %q became a table row; the frontend treats it as data, not a metric", tpl.Key)
+		}
+	}
+
+	// Every collected clock and core sensor must be reachable by the frontend.
+	for key := range values {
+		if !strings.HasPrefix(key, "cpu.clock") && !strings.HasPrefix(key, "cpu.coreTemp") {
+			continue
+		}
+		if !present[key] {
+			t.Errorf("collected key %q has no template and would never be displayed", key)
+		}
+	}
+
+	for _, key := range []string{"cpu.temp", "cpu.pch"} {
+		if !present[key] {
+			t.Errorf("%q has no template and would never be displayed", key)
+		}
+	}
+}
+
+// boardValue builds a numeric board reading, i.e. a temperature or a fan.
+func boardValue() shared.HardwareValue {
+	return shared.NewHardwareValue(float64(42), shared.Celsius, shared.Temperature)
+}
+
+// boardLabel builds the hidden label key value the collector stores alongside a
+// sensor row.
+func boardLabel(text string) shared.HardwareValue {
+	return shared.NewHardwareValue(text, shared.UnknownUnit, shared.Unknown)
+}
+
+// TestBoardKeyTemplatesOrder verifies the display order: identity and firmware
+// fields first, then the board's temperatures, then its fans.
+func TestBoardKeyTemplatesOrder(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"board.vendor":       boardLabel("ASUSTeK COMPUTER INC."),
+		"board.model":        boardLabel("PRIME B450M-A"),
+		"board.version":      boardLabel("Rev X.0x"),
+		"board.serial":       boardLabel("1234567890"),
+		"board.bios.version": boardLabel("2409"),
+		"board.bios.date":    boardLabel("07/10/2020"),
+		"board.temp0":        boardValue(),
+		"board.temp1":        boardValue(),
+		"board.temp2":        boardValue(),
+		"board.temp10":       boardValue(),
+		"board.fan0":         boardValue(),
+		"board.fan1":         boardValue(),
+	}
+
+	want := []string{
+		"board.vendor", "board.model", "board.version", "board.serial",
+		"board.bios.version", "board.bios.date",
+		"board.temp0", "board.temp1", "board.temp2", "board.temp10",
+		"board.fan0", "board.fan1",
+	}
+	if got := keysOfTemplates(boardKeyTemplates(values)); !reflect.DeepEqual(got, want) {
+		t.Errorf("template keys = %v; want %v", got, want)
+	}
+}
+
+// TestBoardKeyTemplatesUseSensorNames is the reason the collector keeps the
+// sensor's own name: a row labelled "SYSTIN Temperature" is readable, and the
+// same row labelled "Temperature 0" is not.
+func TestBoardKeyTemplatesUseSensorNames(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"board.temp0":      boardValue(),
+		"board.tempLabel0": boardLabel("SYSTIN Temperature"),
+		"board.temp1":      boardValue(),
+		"board.tempLabel1": boardLabel("pch_skylake Temperature"),
+		"board.fan0":       boardValue(),
+		"board.fanLabel0":  boardLabel("Chassis Fan Speed"),
+	}
+
+	labels := labelsOf(boardKeyTemplates(values))
+
+	for _, want := range []string{"SYSTIN Temperature", "pch_skylake Temperature", "Chassis Fan Speed"} {
+		if !containsString(labels, want) {
+			t.Errorf("expected label %q to be present in %v", want, labels)
+		}
+	}
+}
+
+// TestBoardKeyTemplatesFallbackLabels covers a sensor whose driver provides no
+// label attribute: the row must still be nameable.
+func TestBoardKeyTemplatesFallbackLabels(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"board.temp3": boardValue(),
+		"board.fan2":  boardValue(),
+	}
+
+	labels := labelsOf(boardKeyTemplates(values))
+
+	if !containsString(labels, "Temperature 3") {
+		t.Errorf("expected a generic temperature label, got %v", labels)
+	}
+	if !containsString(labels, "Fan 2 Speed") {
+		t.Errorf("expected a generic fan label, got %v", labels)
+	}
+}
+
+// TestBoardKeyTemplatesMatchCollectorKeyContract mirrors the CPU contract test:
+// every collected sensor must reach the frontend, and the label keys the
+// collector stores for its own rows must never become rows themselves.
+func TestBoardKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"board.vendor":     boardLabel("LENOVO"),
+		"board.model":      boardLabel("Lenovo Y50-70"),
+		"board.temp0":      boardValue(),
+		"board.tempLabel0": boardLabel("acpitz Temperature"),
+		"board.fan0":       boardValue(),
+		"board.fanLabel0":  boardLabel("Chassis Fan Speed"),
+	}
+
+	templates := boardKeyTemplates(values)
+
+	present := make(map[string]bool, len(templates))
+	for _, tpl := range templates {
+		present[tpl.Key] = true
+		if strings.Contains(tpl.Key, "Label") {
+			t.Errorf("label key %q became a table row; it names a row rather than reporting a metric", tpl.Key)
+		}
+	}
+
+	for key := range values {
+		if strings.HasPrefix(key, "board.tempLabel") || strings.HasPrefix(key, "board.fanLabel") {
+			continue
+		}
+		if !strings.HasPrefix(key, "board.temp") && !strings.HasPrefix(key, "board.fan") {
+			continue
+		}
+		if !present[key] {
+			t.Errorf("collected key %q has no template and would never be displayed", key)
+		}
+	}
+}
+
+// TestBoardHasNoRowsWhenItReportsNothing keeps an empty mainboard card off the
+// screen on systems that expose no board data at all.
+func TestBoardHasNoRowsWhenItReportsNothing(t *testing.T) {
+	data := shared.HardwareData{Name: "Mainboard", Values: map[string]shared.HardwareValue{}}
+	if view := boardViewFor(data); len(view.Keys) != 0 {
+		t.Errorf("expected no rows for an empty board, got %+v", view.Keys)
+	}
+}
+
+// boardViewFor builds the mainboard view the way GetData does.
+func boardViewFor(data shared.HardwareData) DeviceView {
+	return deviceView(data, boardKeyTemplates(data.Values), boardHistory, "")
+}
+
+// TestBoardViewKeepsOnlyRowsWithValues covers the partial board: a machine whose
+// firmware leaves fields blank must show the rows it does have.
+func TestBoardViewKeepsOnlyRowsWithValues(t *testing.T) {
+	view := boardViewFor(shared.HardwareData{
+		Name: "Lenovo Y50-70",
+		Values: map[string]shared.HardwareValue{
+			"board.vendor":     boardLabel("LENOVO"),
+			"board.model":      boardLabel("Lenovo Y50-70"),
+			"board.serial":     boardLabel(""),
+			"board.temp0":      boardValue(),
+			"board.tempLabel0": boardLabel("acpitz Temperature"),
+		},
+	})
+	if len(view.Keys) == 0 {
+		t.Fatal("expected rows for a board that reports values")
+	}
+	if view.Name != "Lenovo Y50-70" {
+		t.Errorf("Name = %q; want the DMI board name", view.Name)
+	}
+	if got := keysOfTemplates(view.Keys); containsString(got, "board.serial") {
+		t.Errorf("an empty serial must not produce a row, got %v", got)
+	}
+	if !containsString(keysOfTemplates(view.Keys), "board.temp0") {
+		t.Errorf("expected the temperature row, got %v", keysOfTemplates(view.Keys))
+	}
+
+	// Temperatures are numeric, so the card gets min/max ranges for them; the
+	// identity strings must not be handed to the history at all.
+	if _, ok := view.MinValues["board.temp0"]; !ok {
+		t.Error("expected a min range for the temperature row")
+	}
+	if _, ok := view.MinValues["board.vendor"]; ok {
+		t.Error("an identity string must not enter the min/max history")
+	}
+}
+
+// TestDiskKeyTemplatesOrder verifies a drive card's row order: identity and
+// medium, then capacity, then the filesystem figures, then temperatures.
+func TestDiskKeyTemplatesOrder(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"disk.model":      boardLabel("Samsung SSD 990 PRO 2TB"),
+		"disk.serial":     boardLabel("S7KHNJ0W512345"),
+		"disk.firmware":   boardLabel("4B2QJXD7"),
+		"disk.medium":     boardLabel("SSD (NVMe)"),
+		"disk.size":       diskSize(2000),
+		"disk.fs.total":   diskSize(1800),
+		"disk.fs.used":    diskSize(900),
+		"disk.fs.free":    diskSize(900),
+		"disk.temp0":      boardValue(),
+		"disk.tempLabel0": boardLabel("Composite Temperature"),
+		"disk.temp1":      boardValue(),
+		"disk.tempLabel1": boardLabel("Sensor 1 Temperature"),
+	}
+
+	want := []string{
+		"disk.model", "disk.serial", "disk.firmware", "disk.medium", "disk.size",
+		"disk.fs.total", "disk.fs.used", "disk.fs.free",
+		"disk.temp0", "disk.temp1",
+	}
+	if got := keysOfTemplates(diskKeyTemplates(values)); !reflect.DeepEqual(got, want) {
+		t.Errorf("template keys = %v; want %v", got, want)
+	}
+}
+
+// TestDiskKeyTemplatesUseSensorLabels is why the collector stores each sensor's
+// own name: "Composite Temperature" identifies the reading, "Drive Temperature 0"
+// does not.
+func TestDiskKeyTemplatesUseSensorLabels(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"disk.temp0":      boardValue(),
+		"disk.tempLabel0": boardLabel("Composite Temperature"),
+		"disk.temp1":      boardValue(),
+	}
+
+	labels := labelsOf(diskKeyTemplates(values))
+
+	if !containsString(labels, "Composite Temperature") {
+		t.Errorf("expected the sensor label, got %v", labels)
+	}
+	if !containsString(labels, "Drive Temperature 1") {
+		t.Errorf("expected a generic label for the unlabelled sensor, got %v", labels)
+	}
+}
+
+// TestDiskKeyTemplatesMatchCollectorKeyContract mirrors the CPU and board
+// contract tests: every collected temperature must reach the frontend, and the
+// label keys must never become rows themselves.
+func TestDiskKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"disk.model":      boardLabel("SAMSUNG MZ7TE512"),
+		"disk.medium":     boardLabel("SSD"),
+		"disk.size":       diskSize(512),
+		"disk.temp0":      boardValue(),
+		"disk.tempLabel0": boardLabel("Composite Temperature"),
+	}
+
+	templates := diskKeyTemplates(values)
+
+	present := make(map[string]bool, len(templates))
+	for _, tpl := range templates {
+		present[tpl.Key] = true
+		if strings.Contains(tpl.Key, "Label") {
+			t.Errorf("label key %q became a table row; it names a row rather than reporting a metric", tpl.Key)
+		}
+	}
+
+	for key := range values {
+		if !strings.HasPrefix(key, "disk.temp") || strings.HasPrefix(key, "disk.tempLabel") {
+			continue
+		}
+		if !present[key] {
+			t.Errorf("collected key %q has no template and would never be displayed", key)
+		}
+	}
+}
+
+// TestDeviceViewScopesHistoryPerDevice guards the reason each card has a history
+// prefix: two drives (or two GPUs) reporting the same metric key must not share
+// one min/max range. The keys the frontend reads are unprefixed, so the prefix
+// must not leak into the view either.
+func TestDeviceViewScopesHistoryPerDevice(t *testing.T) {
+	first := make(map[string][]float64)
+	second := make(map[string][]float64)
+
+	cold := deviceView(shared.HardwareData{
+		Name:   "drive 0",
+		Values: map[string]shared.HardwareValue{"disk.temp0": diskTemp(30)},
+	}, diskKeyTemplates(map[string]shared.HardwareValue{"disk.temp0": diskTemp(30)}), first, "disk0.")
+
+	warm := deviceView(shared.HardwareData{
+		Name:   "drive 1",
+		Values: map[string]shared.HardwareValue{"disk.temp0": diskTemp(70)},
+	}, diskKeyTemplates(map[string]shared.HardwareValue{"disk.temp0": diskTemp(70)}), second, "disk1.")
+
+	if got := cold.MaxValues["disk.temp0"]; got != "30.00" {
+		t.Errorf("drive 0 max = %q; want its own reading", got)
+	}
+	if got := warm.MaxValues["disk.temp0"]; got != "70.00" {
+		t.Errorf("drive 1 max = %q; want its own reading", got)
+	}
+	for key := range cold.MinValues {
+		if strings.Contains(key, ".disk") || strings.HasPrefix(key, "disk0") {
+			t.Errorf("history prefix leaked into the view under key %q", key)
+		}
+	}
+}
+
+// diskSize and diskTemp build drive readings with the units the collector uses.
+func diskSize(gb float64) shared.HardwareValue {
+	return shared.NewHardwareValue(gb, shared.Gigabyte, shared.Memory)
+}
+
+func diskTemp(celsius float64) shared.HardwareValue {
+	return shared.NewHardwareValue(celsius, shared.Celsius, shared.Temperature)
 }
 
 func containsString(haystack []string, needle string) bool {

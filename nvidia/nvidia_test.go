@@ -8,8 +8,8 @@ import (
 )
 
 // TestGPUQueryFieldsOrder locks down the column contract between the
-// --query-gpu field list and the fixed indices getInformationsForGPU uses. If a
-// field is inserted or reordered without updating the indices, metrics would be
+// --query-gpu field list and the fixed indices parseGPURecord uses. If a field
+// is inserted or reordered without updating the indices, metrics would be
 // silently attributed to the wrong label.
 func TestGPUQueryFieldsOrder(t *testing.T) {
 	want := []string{
@@ -25,10 +25,37 @@ func TestGPUQueryFieldsOrder(t *testing.T) {
 		"power.limit",
 		"power.draw",
 		"fan.speed",
+		// Appended last so the metric columns above keep their positions while
+		// one query still reports every GPU. The parser reads it by position.
+		"index",
 	}
 
 	if !reflect.DeepEqual(gpuQueryFields, want) {
 		t.Fatalf("gpuQueryFields = %v; want %v", gpuQueryFields, want)
+	}
+
+	if gpuIndexColumn != len(want)-1 {
+		t.Errorf("gpuIndexColumn = %d; want %d (the last column)", gpuIndexColumn, len(want)-1)
+	}
+}
+
+// TestParseGPUOutputSplitsRows covers the multi-GPU response shape. Querying
+// nvidia-smi without -i returns one row per card, and a card name containing a
+// comma must not shift that row's columns.
+func TestParseGPUOutputSplitsRows(t *testing.T) {
+	output := "\n" +
+		`"NVIDIA GeForce RTX 4090, Founders Edition",550.54.14,62,70,2520,10501,24564,1024,45,450.00,120.50,38,0` + "\n" +
+		"NVIDIA GeForce GTX 860M,535.183.01,49,0,405,2505,4096,512,7,60.00,12.30,30,1\n"
+
+	rows := parseGPUOutput(output)
+	if len(rows) != 2 {
+		t.Fatalf("parseGPUOutput returned %d rows; want 2", len(rows))
+	}
+	if got := rows[0][0]; got != "NVIDIA GeForce RTX 4090, Founders Edition" {
+		t.Errorf("row 0 name = %q; want the quoted name intact", got)
+	}
+	if got := rows[1][gpuIndexColumn]; got != "1" {
+		t.Errorf("row 1 index column = %q; want %q", got, "1")
 	}
 }
 
@@ -96,51 +123,106 @@ func TestParseCSVFieldsMalformedFallsBack(t *testing.T) {
 }
 
 // TestFieldMappingMatchesQueryColumns checks that each metric reads the column
-// that its label implies, using a synthetic nvidia-smi row.
+// that its label implies, driving the real parser rather than a copy of its
+// mapping (a copy would only prove the test agrees with itself).
 func TestFieldMappingMatchesQueryColumns(t *testing.T) {
-	line := "NVIDIA GeForce RTX 4090,550.54.14,62,70,2520,10501,24564,1024,45,450.00,120.50,38"
+	line := "NVIDIA GeForce RTX 4090,550.54.14,62,70,2520,10501,24564,1024,45,450.00,120.50,38,0"
 
-	fields := parseCSVFields(line)
-	field := func(i int) string {
-		if i < len(fields) {
-			return fields[i]
-		}
-		return ""
+	info := parseGPURecord(parseCSVFields(line))
+
+	if info.Name != "NVIDIA GeForce RTX 4090" {
+		t.Errorf("card name = %q; want %q", info.Name, "NVIDIA GeForce RTX 4090")
+	}
+	if got := info.Values[shared.GPUDriverVersion.Key].Value; got != "550.54.14" {
+		t.Errorf("driver version = %v; want %q", got, "550.54.14")
 	}
 
-	// (column index, expected hardware key, expected parsed value)
+	// (expected hardware key, expected parsed value)
 	checks := []struct {
-		index int
-		key   string
-		want  float64
+		key  string
+		want float64
 	}{
-		{2, shared.GPUTemp.Key, 62},
-		{3, shared.VRAMTemp.Key, 70},
-		{4, shared.GPUFrequency.Key, 2520},
-		{5, shared.VRAMLrequency.Key, 10501},
-		{6, shared.VRAMTotal.Key, 24564},
-		{7, shared.VRAMUsed.Key, 1024},
-		{8, shared.GPUUsage.Key, 45},
-		{9, shared.GPUPowerMax.Key, 450},
-		{10, shared.GPUPowerAvg.Key, 120.50},
-		{11, shared.FanSpeed.Key, 38},
+		{shared.GPUTemp.Key, 62},
+		{shared.VRAMTemp.Key, 70},
+		{shared.GPUFrequency.Key, 2520},
+		{shared.VRAMLrequency.Key, 10501},
+		{shared.VRAMTotal.Key, 24564},
+		{shared.VRAMUsed.Key, 1024},
+		{shared.GPUUsage.Key, 45},
+		{shared.GPUPowerMax.Key, 450},
+		{shared.GPUPowerAvg.Key, 120.50},
+		{shared.FanSpeed.Key, 38},
 	}
 
 	for _, c := range checks {
-		got, ok := parseFloatField(field(c.index))
+		value, ok := info.Values[c.key]
 		if !ok {
-			t.Errorf("column %d (%s): value %q not parseable", c.index, c.key, field(c.index))
+			t.Errorf("%s missing from the parsed record", c.key)
+			continue
+		}
+		got, err := value.GetNumericValue()
+		if err != nil {
+			t.Errorf("%s: %v", c.key, err)
 			continue
 		}
 		if got != c.want {
-			t.Errorf("column %d (%s) = %v; want %v", c.index, c.key, got, c.want)
+			t.Errorf("%s = %v; want %v", c.key, got, c.want)
 		}
 	}
 
-	if name := field(0); name != "NVIDIA GeForce RTX 4090" {
-		t.Errorf("column 0 (name) = %q; want %q", name, "NVIDIA GeForce RTX 4090")
+	// The index column is a query detail, not a metric.
+	if _, ok := info.Values["index"]; ok {
+		t.Error("the query's index column leaked into the metric values")
 	}
-	if driver := field(1); driver != "550.54.14" {
-		t.Errorf("column 1 (driver) = %q; want %q", driver, "550.54.14")
+}
+
+// TestParseGPURecordOmitsUnavailableFields ensures a card that reports [N/A]
+// (no fan, no driver-reported sensor) omits those rows instead of showing a
+// bogus reading.
+func TestParseGPURecordOmitsUnavailableFields(t *testing.T) {
+	line := "NVIDIA GeForce RTX 4090,550.54.14,62,70,2520,10501,24564,1024,45,450.00,120.50,[N/A],0"
+
+	info := parseGPURecord(parseCSVFields(line))
+
+	if _, ok := info.Values[shared.FanSpeed.Key]; ok {
+		t.Error("fan speed present despite [N/A]")
+	}
+	if _, ok := info.Values[shared.GPUTemp.Key]; !ok {
+		t.Error("GPU temperature missing despite a real reading")
+	}
+}
+
+// TestParseGPURecordCommaNameKeepsColumnsAligned goes through the parser rather
+// than only the CSV splitter, so a shifted column would be caught here.
+func TestParseGPURecordCommaNameKeepsColumnsAligned(t *testing.T) {
+	line := `"NVIDIA GeForce RTX 4090, Founders Edition",550.54.14,62,70,2520,10501,24564,1024,45,450.00,120.50,38,0`
+
+	info := parseGPURecord(parseCSVFields(line))
+
+	if info.Name != "NVIDIA GeForce RTX 4090, Founders Edition" {
+		t.Errorf("card name = %q; want the quoted name intact", info.Name)
+	}
+	if got := info.Values[shared.GPUDriverVersion.Key].Value; got != "550.54.14" {
+		t.Errorf("driver version = %v; want %q (columns shifted)", got, "550.54.14")
+	}
+	value, ok := info.Values[shared.GPUPowerAvg.Key]
+	if !ok {
+		t.Fatal("power draw missing")
+	}
+	if got, _ := value.GetNumericValue(); got != 120.50 {
+		t.Errorf("power draw = %v; want 120.50 (columns shifted)", got)
+	}
+}
+
+// TestParseGPURecordTruncatedRow ensures a short row (an older driver that
+// rejects some fields) does not panic and still yields the name.
+func TestParseGPURecordTruncatedRow(t *testing.T) {
+	info := parseGPURecord(parseCSVFields("NVIDIA GeForce GTX 860M"))
+
+	if info.Name != "NVIDIA GeForce GTX 860M" {
+		t.Errorf("card name = %q; want %q", info.Name, "NVIDIA GeForce GTX 860M")
+	}
+	if info.HasTelemetry() {
+		t.Error("a name-only card reported telemetry")
 	}
 }

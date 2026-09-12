@@ -19,6 +19,36 @@ var (
 	CPUPCHTemp = KeyTemplate{"CPU PCH Temperature", "cpu.pch"}
 )
 
+// Mainboard template variables
+var (
+	BoardVendor      = KeyTemplate{"Mainboard Vendor", "board.vendor"}
+	BoardModel       = KeyTemplate{"Mainboard Model", "board.model"}
+	BoardVersion     = KeyTemplate{"Mainboard Version", "board.version"}
+	BoardSerial      = KeyTemplate{"Mainboard Serial", "board.serial"}
+	BoardBIOSVersion = KeyTemplate{"BIOS Version", "board.bios.version"}
+	BoardBIOSDate    = KeyTemplate{"BIOS Date", "board.bios.date"}
+
+	// As with the CPU, the sensor rows have no fixed templates: a board exposes
+	// as many temperature and fan rows as its ACPI zones and Super I/O chip
+	// provide, so main.go generates them from the collected values ("board.tempN"
+	// and "board.fanN").
+)
+
+// Storage template variables. The per-drive temperature rows ("disk.tempN") have
+// no fixed templates, for the same reason as the mainboard's: an NVMe drive
+// reports a composite sensor plus one per temperature sensor, so main.go
+// generates those rows from the collected values.
+var (
+	DiskModel    = KeyTemplate{"Model", "disk.model"}
+	DiskSerial   = KeyTemplate{"Serial Number", "disk.serial"}
+	DiskFirmware = KeyTemplate{"Firmware", "disk.firmware"}
+	DiskMedium   = KeyTemplate{"Medium", "disk.medium"}
+	DiskSize     = KeyTemplate{"Capacity", "disk.size"}
+	DiskFSTotal  = KeyTemplate{"Filesystem Total", "disk.fs.total"}
+	DiskFSUsed   = KeyTemplate{"Filesystem Used", "disk.fs.used"}
+	DiskFSFree   = KeyTemplate{"Filesystem Free", "disk.fs.free"}
+)
+
 // GPU template variables
 var (
 	GPUName          = KeyTemplate{"GPU Name", "name"}

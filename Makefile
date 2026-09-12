@@ -91,7 +91,7 @@ package: build
 	cp icons/icon-192.png $(PKGDIR)/usr/share/icons/hicolor/192x192/apps/openhwinfo.png
 	cp icons/icon-512.png $(PKGDIR)/usr/share/icons/hicolor/256x256/apps/openhwinfo.png
 	cp icons/icon-512.png $(PKGDIR)/usr/share/icons/hicolor/512x512/apps/openhwinfo.png
-	printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: %s\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0\nDescription: OpenHWInfo — live CPU & GPU hardware monitor (Go + Wails v2)\n Displays real-time CPU and GPU metrics such as temperature, clock,\n usage, power draw and VRAM.\n' \
+	printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: %s\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0\nDescription: OpenHWInfo — live CPU, GPU & mainboard hardware monitor (Go + Wails v2)\n Displays real-time CPU, GPU and mainboard metrics such as temperature,\n clock, usage, power draw, VRAM and board fan speeds.\n' \
 	  "$(APP)" "$(VERSION)" "$(ARCH)" "$(MAINTAINER)" > $(PKGDIR)/DEBIAN/control
 	chmod 0755 $(PKGDIR)/usr/bin/$(APP)
 	dpkg-deb -b $(PKGDIR) dist/$(DEBNAME)

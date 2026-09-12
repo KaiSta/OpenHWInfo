@@ -3,7 +3,6 @@ package nvidia
 import (
 	"encoding/csv"
 	"log"
-	"os/exec"
 	"strconv"
 	"strings"
 	"unicode"
@@ -15,6 +14,11 @@ import (
 // CSV columns returned by nvidia-smi. Every entry must be a valid field name
 // for --query-gpu: if even one is invalid, nvidia-smi exits with an error and
 // produces no output at all.
+//
+// "index" is appended last so that the metric columns keep the positions the
+// parser below reads them from, while still letting one query describe every
+// GPU on the system. Without it a second nvidia-smi call is needed just to
+// discover the card indices.
 var gpuQueryFields = []string{
 	"name",
 	"driver_version",
@@ -28,56 +32,41 @@ var gpuQueryFields = []string{
 	"power.limit",
 	"power.draw",
 	"fan.speed",
+	"index",
 }
 
-func Available() bool {
-	return probeNvidia()
-}
+// gpuIndexColumn is the position of the "index" field in gpuQueryFields. It must
+// stay in step with the slice above; TestGPUQueryFieldsOrder asserts that.
+const gpuIndexColumn = 12
 
-func probeNvidia() bool {
-	cmd := exec.Command("sh", "-c", "lspci | grep -i nvidia")
-	output, err := cmd.Output()
-	if err != nil || len(output) == 0 {
-		log.Println("No NVIDIA cards found")
-		return false
+// queryGPUs returns one parsed CSV record per NVIDIA GPU, using a single
+// nvidia-smi invocation for the whole system. An empty result means nvidia-smi
+// could not be queried at all (no driver, no cards). This is also what decides
+// whether the vendor is "available": the card being visible in lspci is not
+// enough, because without the proprietary driver nvidia-smi is absent, every
+// metric query fails, and the card would render with no readings at all.
+func queryGPUs() [][]string {
+	query := strings.Join(gpuQueryFields, ",")
+	output := shared.RunShell("nvidia-smi --query-gpu=" + query + " --format=csv,noheader")
+	if strings.TrimSpace(output) == "" {
+		log.Println("No output from nvidia-smi --query-gpu (driver installed?)")
+		return nil
 	}
-	return true
+	return parseGPUOutput(output)
 }
 
-// gpuIndices returns the index of every NVIDIA GPU known to nvidia-smi.
-func gpuIndices() []int {
-	lines := shared.RunShell("nvidia-smi --query-gpu=index --format=csv,noheader")
-	var indices []int
-	for _, line := range strings.Split(lines, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+// parseGPUOutput splits nvidia-smi's multi-line CSV output into one field slice
+// per GPU. Splitting on lines is safe: a GPU name can contain a comma but not a
+// newline.
+func parseGPUOutput(output string) [][]string {
+	var rows [][]string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		if idx, err := strconv.Atoi(line); err == nil {
-			indices = append(indices, idx)
-		}
+		rows = append(rows, parseCSVFields(line))
 	}
-	if len(indices) > 0 {
-		return indices
-	}
-
-	// Fall back to counting the cards reported by `nvidia-smi -L`.
-	list := shared.RunShell("nvidia-smi -L")
-	count := 0
-	for _, line := range strings.Split(list, "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
-	}
-	if count > 0 {
-		indices = make([]int, count)
-		for i := range indices {
-			indices[i] = i
-		}
-		return indices
-	}
-
-	return []int{0}
+	return rows
 }
 
 // parseFloatField extracts the leading numeric value from a nvidia-smi CSV
@@ -110,15 +99,12 @@ func parseCSVFields(line string) []string {
 	return records
 }
 
-// getInformationsForGPU collects all metrics for a single GPU index using one
-// nvidia-smi invocation.
-func getInformationsForGPU(index int) shared.HardwareData {
+// parseGPURecord builds one GPU's metrics from a single nvidia-smi CSV record.
+// It takes the fields rather than running the query itself so that the column
+// mapping is testable against a synthetic row.
+func parseGPURecord(fields []string) shared.HardwareData {
 	data := make(map[string]shared.HardwareValue)
 	name := "NVIDIA GPU"
-
-	query := strings.Join(gpuQueryFields, ",")
-	output := shared.RunShell("nvidia-smi -i " + strconv.Itoa(index) + " --query-gpu=" + query + " --format=csv,noheader")
-	fields := parseCSVFields(output)
 
 	field := func(i int) string {
 		if i < len(fields) {
@@ -158,34 +144,39 @@ func getInformationsForGPU(index int) shared.HardwareData {
 	setNumeric(shared.GPUPowerAvg.Key, 10, shared.Watt, shared.Power)
 	setNumeric(shared.FanSpeed.Key, 11, shared.RPM, shared.Unknown)
 
-	return shared.HardwareData{Name: name, Values: data, IsGPU: true}
-}
-
-// GetInformations returns the information for the first NVIDIA GPU.
-func GetInformations() shared.HardwareData {
-	all := GetAllInformations()
-	if len(all) == 0 {
-		return shared.HardwareData{Name: "NVIDIA GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true}
-	}
-	return all[0]
+	return shared.HardwareData{Name: name, Values: data}
 }
 
 // GetAllInformations returns the information for every NVIDIA GPU on the system.
+// It returns nil when nvidia-smi cannot be queried, so callers can treat an empty
+// result as "vendor unavailable" without probing a second time. Cards that expose
+// no readings are omitted rather than reported as empty entries.
+//
+// One nvidia-smi call covers every GPU: nvidia-smi already reports all of them,
+// so querying each by index would fork it twice per tick (once to discover the
+// indices, once per card) for the same data.
 func GetAllInformations() []shared.HardwareData {
-	if !probeNvidia() {
-		log.Println("Returning default info due to no NVIDIA cards found")
-		return []shared.HardwareData{
-			{Name: "NVIDIA GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true},
-		}
+	rows := queryGPUs()
+	if len(rows) == 0 {
+		return nil
 	}
+	log.Printf("nvidia-smi reported %d GPU(s)\n", len(rows))
 
 	var result []shared.HardwareData
-	for _, index := range gpuIndices() {
-		log.Printf("Collecting information for NVIDIA GPU %d\n", index)
-		result = append(result, getInformationsForGPU(index))
-	}
-	if len(result) == 0 {
-		result = append(result, shared.HardwareData{Name: "NVIDIA GPU", Values: make(map[string]shared.HardwareValue), IsGPU: true})
+	for rowIndex, fields := range rows {
+		// Fall back to the row position when the index column is unusable.
+		index := rowIndex
+		if len(fields) > gpuIndexColumn {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(fields[gpuIndexColumn])); err == nil {
+				index = parsed
+			}
+		}
+		data := parseGPURecord(fields)
+		if !data.HasTelemetry() {
+			log.Printf("Skipping NVIDIA GPU %d: no readable metrics\n", index)
+			continue
+		}
+		result = append(result, data)
 	}
 	return result
 }
