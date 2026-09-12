@@ -3,6 +3,7 @@
   "frontend": {
     "dir": "website"
   },
+  "outputFilename": "OpenHWInfo",
   "outputBin": "build/bin",
   "author": "KaiSta",
   "description": "Live CPU and GPU hardware monitor built with Wails"

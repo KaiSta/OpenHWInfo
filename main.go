@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
@@ -187,11 +188,32 @@ func diskKeyTemplates(values map[string]shared.HardwareValue) []shared.KeyTempla
 	return append(templates, labelledBoardTemplates(values, "disk.temp", "disk.tempLabel", "Drive Temperature %d")...)
 }
 
-// Global maps to track historical values for min/max calculations
-var cpuHistory = make(map[string][]float64)
-var gpuHistory = make(map[string][]float64)
-var diskHistory = make(map[string][]float64)
-var boardHistory = make(map[string][]float64)
+// historyStore is a mutex-guarded min/max history for one device family.
+// The poll path is synchronous today, but Wails does not guarantee that
+// GetData is never called concurrently, so a plain map would be a race
+// under overlap.
+type historyStore struct {
+	mu sync.Mutex
+	m  map[string][]float64
+}
+
+func newHistoryStore() *historyStore {
+	return &historyStore{m: make(map[string][]float64)}
+}
+
+func (h *historyStore) updateAndCalculate(currentValues map[string]shared.HardwareValue) (map[string]string, map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return updateHistoryAndCalculateMinMax(h.m, currentValues)
+}
+
+// Global stores to track historical values for min/max calculations.
+var (
+	cpuHistory   = newHistoryStore()
+	gpuHistory   = newHistoryStore()
+	diskHistory  = newHistoryStore()
+	boardHistory = newHistoryStore()
+)
 
 // App is the main application struct.
 type App struct {
@@ -270,7 +292,7 @@ func (a *App) GetData() Data {
 	}
 
 	// Update history and calculate min/max values for CPU
-	cpuMinValues, cpuMaxValues := updateHistoryAndCalculateMinMax(cpuHistory, cpuData.Values)
+	cpuMinValues, cpuMaxValues := cpuHistory.updateAndCalculate(cpuData.Values)
 
 	return Data{
 		CpuKeys:      filteredCpuKeys,
@@ -288,7 +310,7 @@ func (a *App) GetData() Data {
 // the min/max ranges from that device's own value history. historyPrefix scopes
 // the history to the device ("gpu0.", "disk1."), so two cards of the same kind
 // never share a range; it is empty for the mainboard, of which there is one.
-func deviceView(data shared.HardwareData, templates []shared.KeyTemplate, history map[string][]float64, historyPrefix string) DeviceView {
+func deviceView(data shared.HardwareData, templates []shared.KeyTemplate, history *historyStore, historyPrefix string) DeviceView {
 	view := DeviceView{Name: data.Name}
 
 	// Keep only the rows that carry a value: a device does not have to report
@@ -313,7 +335,7 @@ func deviceView(data shared.HardwareData, templates []shared.KeyTemplate, histor
 			scoped[historyPrefix+key] = value
 		}
 	}
-	minValues, maxValues := updateHistoryAndCalculateMinMax(history, scoped)
+	minValues, maxValues := history.updateAndCalculate(scoped)
 
 	view.MinValues = make(map[string]string, len(minValues))
 	for key, value := range minValues {

@@ -389,7 +389,7 @@ func TestBoardHasNoRowsWhenItReportsNothing(t *testing.T) {
 
 // boardViewFor builds the mainboard view the way GetData does.
 func boardViewFor(data shared.HardwareData) DeviceView {
-	return deviceView(data, boardKeyTemplates(data.Values), boardHistory, "")
+	return deviceView(data, boardKeyTemplates(data.Values), newHistoryStore(), "")
 }
 
 // TestBoardViewKeepsOnlyRowsWithValues covers the partial board: a machine whose
@@ -513,8 +513,8 @@ func TestDiskKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
 // one min/max range. The keys the frontend reads are unprefixed, so the prefix
 // must not leak into the view either.
 func TestDeviceViewScopesHistoryPerDevice(t *testing.T) {
-	first := make(map[string][]float64)
-	second := make(map[string][]float64)
+	first := newHistoryStore()
+	second := newHistoryStore()
 
 	cold := deviceView(shared.HardwareData{
 		Name:   "drive 0",

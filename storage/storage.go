@@ -6,12 +6,16 @@
 // privilege is required. The temperature of a SATA drive needs the kernel's
 // drivetemp driver (module "drivetemp"), and an NVMe drive's temperature comes
 // from the nvme driver's own hwmon device; both expose their readings through
-// the same tempN_input attributes, so they are read identically. Deeper SMART
-// data (wear, data written, power-on hours) is deliberately not read: it needs
-// smartctl or nvme-cli with root.
+// the same tempN_input attributes, so they are read identically. When the
+// drivetemp driver is not loaded (the usual default) the SATA temperature is
+// read from UDisks2's SmartTemperature property instead, which is the same data
+// psensor shows via libatasmart/hddtemp/udisks2 but without requiring raw
+// device access. Deeper SMART data (wear, data written, power-on hours) is
+// deliberately not read: it needs smartctl or nvme-cli with root.
 package storage
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -19,8 +23,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
+	"github.com/godbus/dbus/v5"
 )
 
 // sysDir and mountsPath are variables so tests can point the collector at a
@@ -86,7 +93,7 @@ func GetInformations() []shared.HardwareData {
 		}
 
 		addFilesystemUsage(values, usage[d.name])
-		addTemperatures(values, d.path)
+		addTemperatures(values, d.path, d.name)
 
 		log.Printf("Found drive %s (%s)\n", d.model, d.name)
 		result = append(result, shared.HardwareData{Name: d.model, Values: values})
@@ -355,29 +362,70 @@ func unescapeMountField(field string) string {
 // driver attach their hwmon device; a chip that is not one of those two is
 // ignored, so a sensor belonging to something else cannot be shown as a drive
 // temperature.
-func addTemperatures(values map[string]shared.HardwareValue, devicePath string) {
-	hwmonDir := shared.FindFirstSubpath(filepath.Join(devicePath, "device", "hwmon"), "hwmon*")
-	if hwmonDir == "" {
-		// No temperature sensor: either an NVMe drive whose hwmon is missing, or
-		// a SATA drive without the drivetemp driver loaded.
-		return
+//
+// Two sysfs layouts are handled: drivetemp (and the fixture's NVMe layout)
+// appear as device/hwmon/hwmonN (nested), while a real NVMe controller
+// exposes device/hwmonN (flat). When no hwmon is found — the usual case for a
+// SATA drive before the drivetemp module is loaded — the temperature is
+// obtained from UDisks2's SmartTemperature property instead, which is the same
+// data psensor shows via libatasmart/hddtemp/udisks2. That path needs no raw
+// device access because UDisks2 already runs as root via D-Bus.
+func addTemperatures(values map[string]shared.HardwareValue, devicePath, blockName string) {
+	hwmonDir := findDriveHwmonDir(devicePath)
+	if hwmonDir != "" {
+		found := 0
+		for _, sensor := range numberedSensors(hwmonDir) {
+			value, ok := milliCelsius(sensor.input)
+			if !ok {
+				continue
+			}
+			label := fmt.Sprintf("Drive Temperature %d", sensor.index)
+			if sensor.label != "" {
+				label = sensor.label + " Temperature"
+			}
+			addTemperature(values, label, value)
+			found++
+		}
+		if found > 0 {
+			return
+		}
 	}
-	chipName, ok := shared.ReadSysFile(filepath.Join(hwmonDir, "name"))
-	if !ok || (chipName != "nvme" && chipName != "drivetemp") {
-		return
+	// No hwmon reading — try UDisks2 (psensor parity). This is the common
+	// path for SATA SSDs when drivetemp is not loaded: psensor's libatasmart
+	// column reads the same SMART temperature that UDisks2 exposes via D-Bus.
+	if celsius, ok := udisksTemperatureProvider(blockName); ok {
+		label := "Drive Temperature"
+		if strings.HasPrefix(blockName, "nvme") {
+			label = "Composite Temperature"
+		}
+		addTemperature(values, label, celsius)
 	}
+}
 
-	for _, sensor := range numberedSensors(hwmonDir) {
-		value, ok := milliCelsius(sensor.input)
-		if !ok {
-			continue
+// findDriveHwmonDir locates the hwmon directory for a drive, handling both the
+// nested device/hwmon/hwmonN layout (drivetemp and the fixture's NVMe) and the
+// flat device/hwmonN layout a real NVMe controller uses. It returns "" when no
+// suitable chip is present.
+func findDriveHwmonDir(devicePath string) string {
+	// Nested: device/hwmon/hwmon*  (SATA drivetemp, fixture NVMe)
+	if matches, _ := filepath.Glob(filepath.Join(devicePath, "device", "hwmon", "hwmon*")); len(matches) > 0 {
+		sort.Strings(matches)
+		for _, dir := range matches {
+			if chip, ok := shared.ReadSysFile(filepath.Join(dir, "name")); ok && (chip == "nvme" || chip == "drivetemp") {
+				return dir
+			}
 		}
-		label := fmt.Sprintf("Drive Temperature %d", sensor.index)
-		if sensor.label != "" {
-			label = sensor.label + " Temperature"
-		}
-		addTemperature(values, label, value)
 	}
+	// Flat: device/hwmon*  (real NVMe controller)
+	if matches, _ := filepath.Glob(filepath.Join(devicePath, "device", "hwmon*")); len(matches) > 0 {
+		sort.Strings(matches)
+		for _, dir := range matches {
+			if chip, ok := shared.ReadSysFile(filepath.Join(dir, "name")); ok && (chip == "nvme" || chip == "drivetemp") {
+				return dir
+			}
+		}
+	}
+	return ""
 }
 
 // driveSensor is one numbered hwmon temperature group (tempN_*).
@@ -448,4 +496,177 @@ func milliCelsius(raw string) (float64, bool) {
 		return 0, false
 	}
 	return float64(milli) / 1000, true
+}
+
+// --- UDisks2 fallback for drive temperatures (psensor parity) ---
+
+// udisksTemperatureProvider is the function used to obtain a drive temperature
+// from UDisks2. It defaults to the real D-Bus query but can be replaced in
+// tests to avoid touching the host's D-Bus when sysDir points at a fixture.
+var udisksTemperatureProvider = realUDisksTemperature
+
+var (
+	udisksConnMu      sync.Mutex
+	udisksConn        *dbus.Conn
+	udisksConnErr     error
+	udisksConnErrTime time.Time
+
+	udisksCacheMu sync.Mutex
+	udisksCache   = make(map[string]udisksCacheEntry)
+)
+
+type udisksCacheEntry struct {
+	value   float64
+	ok      bool
+	fetched time.Time
+}
+
+const udisksCacheTTL = 10 * time.Second
+const udisksTimeout = 200 * time.Millisecond
+
+func getUDisksConn() (*dbus.Conn, error) {
+	udisksConnMu.Lock()
+	defer udisksConnMu.Unlock()
+	if udisksConn != nil {
+		if udisksConn.Connected() {
+			return udisksConn, nil
+		}
+		_ = udisksConn.Close()
+		udisksConn = nil
+		udisksConnErr = nil
+	}
+	if udisksConnErr != nil {
+		// Last SystemBus attempt failed (e.g. no bus on this host). Retry after
+		// a backoff window rather than failing forever; the per-drive cache
+		// already rate-limits callers to udisksCacheTTL, so a 30s window means
+		// at most ~3 extra dial attempts per minute even with many drives.
+		if time.Since(udisksConnErrTime) < 30*time.Second {
+			return nil, udisksConnErr
+		}
+		udisksConnErr = nil
+	}
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		udisksConnErr = err
+		udisksConnErrTime = time.Now()
+		return nil, err
+	}
+	udisksConn = conn
+	return conn, nil
+}
+
+// realUDisksTemperature queries UDisks2's SmartTemperature for a block device.
+// In a fixture (sysDir != "/sys") no query is performed so tests are not
+// polluted by the host's real drive temperatures; tests that want the fallback
+// replace udisksTemperatureProvider with a stub.
+//
+// Results are cached per drive for udisksCacheTTL so a burst of drives does not
+// stall every 5 s poll, and a failing/missing D-Bus does not stall it either.
+func realUDisksTemperature(blockName string) (float64, bool) {
+	if sysDir != "/sys" {
+		return 0, false
+	}
+	udisksCacheMu.Lock()
+	if e, ok := udisksCache[blockName]; ok && time.Since(e.fetched) < udisksCacheTTL {
+		v, ok2 := e.value, e.ok
+		udisksCacheMu.Unlock()
+		return v, ok2
+	}
+	udisksCacheMu.Unlock()
+	val, ok := fetchUDisksTemperature(blockName)
+	udisksCacheMu.Lock()
+	udisksCache[blockName] = udisksCacheEntry{value: val, ok: ok, fetched: time.Now()}
+	udisksCacheMu.Unlock()
+	return val, ok
+}
+
+func fetchUDisksTemperature(blockName string) (float64, bool) {
+	conn, err := getUDisksConn()
+	if err != nil {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), udisksTimeout)
+	defer cancel()
+
+	blockPath := dbus.ObjectPath("/org/freedesktop/UDisks2/block_devices/" + blockName)
+	blockObj := conn.Object("org.freedesktop.UDisks2", blockPath)
+
+	var v dbus.Variant
+	if err := blockObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.UDisks2.Block", "Drive").Store(&v); err != nil {
+		return 0, false
+	}
+	drivePath, ok := v.Value().(dbus.ObjectPath)
+	if !ok {
+		if s, ok2 := v.Value().(string); ok2 {
+			drivePath = dbus.ObjectPath(s)
+		} else {
+			return 0, false
+		}
+	}
+	if drivePath == "/" || drivePath == "" {
+		return 0, false
+	}
+	driveObj := conn.Object("org.freedesktop.UDisks2", drivePath)
+
+	// ATA: SmartTemperature is a double in Kelvin (0 means unknown).
+	var av dbus.Variant
+	if err := driveObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.UDisks2.Drive.Ata", "SmartTemperature").Store(&av); err == nil {
+		switch val := av.Value().(type) {
+		case float64:
+			if val > 200 && val < 500 {
+				return val - 273.15, true
+			}
+		case float32:
+			if float64(val) > 200 && float64(val) < 500 {
+				return float64(val) - 273.15, true
+			}
+		case uint16:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case uint32:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case uint64:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case int16:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case int32:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		}
+	}
+	// NVMe: SmartTemperature is a uint16 in Kelvin.
+	var nv dbus.Variant
+	if err := driveObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.UDisks2.NVMe.Controller", "SmartTemperature").Store(&nv); err == nil {
+		switch val := nv.Value().(type) {
+		case uint16:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case uint32:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case uint64:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case int16:
+			if val != 0 {
+				return float64(val) - 273.15, true
+			}
+		case float64:
+			if val > 200 && val < 500 {
+				return val - 273.15, true
+			}
+		}
+	}
+	return 0, false
 }

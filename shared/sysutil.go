@@ -21,6 +21,18 @@ func RunShell(command string) string {
 	return strings.TrimSpace(string(output))
 }
 
+// RunCommand executes a program directly (no shell) and returns its trimmed
+// stdout. Unlike RunShell it does not interpret metacharacters, so arguments
+// derived from sysfs (e.g. a PCI address) cannot be injected.
+func RunCommand(name string, args ...string) string {
+	output, err := exec.Command(name, args...).Output()
+	if err != nil {
+		log.Printf("Error executing %s %v: %v\n", name, args, err)
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
 // FindFirstSubpath returns the first path matching pattern directly beneath
 // basePath, or an empty string when nothing matches. It is used to locate the
 // hwmon directory of a DRM card (e.g. "class/drm/card0/device/hwmon", "hwmon*").

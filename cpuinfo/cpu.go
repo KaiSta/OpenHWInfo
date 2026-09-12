@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
@@ -17,15 +19,33 @@ var (
 	cpuVendorIDKey = shared.CPUVendorID.Key
 	cpuBrandKey    = shared.CPUBrand.Key
 	cpuModelKey    = shared.CPUModel.Key
+
+	sensorsProbeMu    sync.Mutex
+	sensorsProbeOK    bool
+	sensorsProbeDone  bool
+	sensorsProbeTime  time.Time
+	sensorsProbeTTL   = 60 * time.Second
 )
 
-func GetInformations() shared.HardwareData {
-	probeCmd := exec.Command("which", "sensors")
-	var probeOut bytes.Buffer
-	probeCmd.Stdout = &probeOut
-	err := probeCmd.Run()
-	if probeOut.String() == "" {
+func hasSensors() bool {
+	sensorsProbeMu.Lock()
+	defer sensorsProbeMu.Unlock()
+	if sensorsProbeDone && time.Since(sensorsProbeTime) < sensorsProbeTTL {
+		return sensorsProbeOK
+	}
+	_, err := exec.LookPath("sensors")
+	ok := err == nil
+	sensorsProbeOK = ok
+	sensorsProbeDone = true
+	sensorsProbeTime = time.Now()
+	if !ok {
 		log.Println("CPU probe failed, please install lm-sensors package")
+	}
+	return ok
+}
+
+func GetInformations() shared.HardwareData {
+	if !hasSensors() {
 		return shared.HardwareData{Name: "", Values: make(map[string]shared.HardwareValue)}
 	}
 
@@ -37,8 +57,7 @@ func GetInformations() shared.HardwareData {
 	cmd := exec.Command("sensors")
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	err = cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		log.Printf("Error reading sensor data: %v\n", err)
 		hwData := shared.HardwareData{Name: name, Values: make(map[string]shared.HardwareValue)}
 		for k, v := range cpus {

@@ -104,6 +104,21 @@ func writeMountsFixture(t *testing.T, content string) {
 	t.Cleanup(func() { mountsPath = original })
 }
 
+// stubUDisks stubs the UDisks2 temperature lookup so tests do not reach the
+// host's D-Bus: sysDir is a fixture, so the real provider would short-circuit
+// anyway, but that contract is pinned here and the stub lets the fallback be
+// exercised in isolation.
+func stubUDisks(t *testing.T, temps map[string]float64) {
+	t.Helper()
+
+	original := udisksTemperatureProvider
+	udisksTemperatureProvider = func(blockName string) (float64, bool) {
+		value, ok := temps[blockName]
+		return value, ok
+	}
+	t.Cleanup(func() { udisksTemperatureProvider = original })
+}
+
 // stubFilesystemUsage replaces the statfs call with fixed sizes per mount point
 // and records which mount points were queried, so the tests can prove that an
 // unmappable device is never measured.
@@ -168,6 +183,7 @@ func TestGetInformationsReadsDriveIdentity(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, mountsFixture)
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	drives := GetInformations()
 	if len(drives) != 3 {
@@ -206,6 +222,7 @@ func TestDriveCapacityUsesDecimalGigabytes(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	drives := GetInformations()
 
@@ -221,6 +238,7 @@ func TestGetInformationsSkipsNonDrives(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	drives := GetInformations()
 
@@ -243,6 +261,7 @@ func TestGetInformationsWithoutDrives(t *testing.T) {
 	writeSysFixture(t, map[string]string{"block/zram0/queue/rotational": "0"})
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	if drives := GetInformations(); drives != nil {
 		t.Errorf("expected no drives, got %v", drives)
@@ -253,6 +272,7 @@ func TestNVMeTemperaturesUseTheirSensorLabels(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	nvme := driveByModel(t, GetInformations(), "Samsung SSD 990 PRO 2TB")
 
@@ -287,6 +307,7 @@ func TestDrivetempIsAcceptedButOtherChipsAreNot(t *testing.T) {
 	writeSysFixture(t, files)
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
 	if _, ok := sata.Values["disk.temp0"]; ok {
@@ -309,6 +330,7 @@ func TestDrivetempIsAcceptedButOtherChipsAreNot(t *testing.T) {
 func TestFilesystemUsageIsAggregatedPerDrive(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, mountsFixture)
+	stubUDisks(t, nil)
 	queried := stubFilesystemUsage(t, map[string][3]uint64{
 		"/":          {500_000_000_000, 100_000_000_000, 400_000_000_000},
 		"/boot/efi":  {535_000_000, 107_000_000, 428_000_000},
@@ -356,6 +378,7 @@ func TestFilesystemUsageIsAbsentWhenTheDriveIsNotMounted(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	drives := GetInformations()
 	for _, drive := range drives {
@@ -375,6 +398,7 @@ func TestFilesystemUsageIsAbsentWhenTheMountCannotBeRead(t *testing.T) {
 	// traverse. A size that cannot be read produces no row at all rather than a
 	// zero-sized filesystem.
 	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
 
 	drives := GetInformations()
 	for _, key := range []string{shared.DiskFSTotal.Key, shared.DiskFSUsed.Key, shared.DiskFSFree.Key} {
@@ -386,6 +410,7 @@ func TestFilesystemUsageIsAbsentWhenTheMountCannotBeRead(t *testing.T) {
 
 func TestFilesystemUsageIsAbsentWhenTheMountTableIsMissing(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
+	stubUDisks(t, nil)
 
 	original := mountsPath
 	mountsPath = filepath.Join(t.TempDir(), "does-not-exist")
@@ -481,6 +506,151 @@ func TestMilliCelsius(t *testing.T) {
 	}
 	if _, ok := milliCelsius("n/a"); ok {
 		t.Error("an unparsable reading must not be reported")
+	}
+}
+
+// TestNVMeFlatHwmonPathIsRecognized covers the real-NVMe layout where the hwmon
+// device appears directly as device/hwmonN (flat), not nested as the fixture's
+// device/hwmon/hwmonN — the latter still passes, but the flat form was the one
+// that left the internal NVMe with no temperature on the review host.
+func TestNVMeFlatHwmonPathIsRecognized(t *testing.T) {
+	files := sysfsFixture()
+	// Replace the nested fixture path with the real flat location
+	// (device/hwmon0 rather than device/hwmon/hwmon0).
+	for key := range files {
+		if strings.HasPrefix(key, "block/nvme0n1/device/hwmon/") {
+			delete(files, key)
+		}
+	}
+	files["block/nvme0n1/device/hwmon0/name"] = "nvme"
+	files["block/nvme0n1/device/hwmon0/temp1_input"] = "49850"
+	files["block/nvme0n1/device/hwmon0/temp1_label"] = "Composite"
+	files["block/nvme0n1/device/hwmon0/temp3_input"] = "69850"
+	files["block/nvme0n1/device/hwmon0/temp3_label"] = "Sensor 2"
+	writeSysFixture(t, files)
+	writeMountsFixture(t, "")
+	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil)
+
+	nvme := driveByModel(t, GetInformations(), "Samsung SSD 990 PRO 2TB")
+	if got := numericValue(t, nvme, "disk.temp0"); math.Abs(got-49.85) > 1e-9 {
+		t.Errorf("disk.temp0 in flat layout = %v; want 49.85", got)
+	}
+	if got := textValue(t, nvme, tempLabelKeyFor("disk.temp0")); got != "Composite Temperature" {
+		t.Errorf("disk.temp0 label in flat layout = %q; want %q", got, "Composite Temperature")
+	}
+	if got := numericValue(t, nvme, "disk.temp1"); math.Abs(got-69.85) > 1e-9 {
+		t.Errorf("disk.temp1 in flat layout = %v; want 69.85", got)
+	}
+	if got := textValue(t, nvme, tempLabelKeyFor("disk.temp1")); got != "Sensor 2 Temperature" {
+		t.Errorf("disk.temp1 label = %q; want %q", got, "Sensor 2 Temperature")
+	}
+}
+
+// TestSATATempViaUDisksFallback verifies psensor parity: when the drivetemp
+// module is not loaded (no hwmon), the temperature is recovered from UDisks2's
+// SmartTemperature — the same SMART data psensor reads via libatasmart. The
+// stub stands in for the D-Bus service, so the fixture's absence of a real
+// hwmon does not pollute the test with the host's drive.
+func TestSATATempViaUDisksFallback(t *testing.T) {
+	files := sysfsFixture()
+	// Remove the drivetemp hwmon so the collector must use the UDisks fallback.
+	for key := range files {
+		if strings.HasPrefix(key, "block/sda/device/hwmon/") {
+			delete(files, key)
+		}
+	}
+	writeSysFixture(t, files)
+	writeMountsFixture(t, "")
+	stubFilesystemUsage(t, nil)
+	stubUDisks(t, map[string]float64{"sda": 27.0})
+
+	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
+	if got := numericValue(t, sata, "disk.temp0"); math.Abs(got-27.0) > 1e-9 {
+		t.Errorf("disk.temp0 from UDisks fallback = %v; want 27.0", got)
+	}
+	if got := textValue(t, sata, tempLabelKeyFor("disk.temp0")); got != "Drive Temperature" {
+		t.Errorf("UDisks label = %q; want %q", got, "Drive Temperature")
+	}
+}
+
+func TestUDisksFallbackIsOnlyUsedWhenHwmonIsMissing(t *testing.T) {
+	// The SATA fixture already carries a drivetemp sensor; the UDisks answer is
+	// available but must be ignored as long as hwmon is readable, so a working
+	// kernel module is not shadowed by a stale D-Bus value.
+	writeSysFixture(t, sysfsFixture())
+	writeMountsFixture(t, "")
+	stubFilesystemUsage(t, nil)
+	stubUDisks(t, map[string]float64{"sda": 99.0})
+
+	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
+	if got := numericValue(t, sata, "disk.temp0"); math.Abs(got-31.0) > 1e-9 {
+		t.Errorf("disk.temp0 with hwmon present = %v; wanted hwmon 31.0 not UDisks 99.0", got)
+	}
+}
+
+func TestUDisksEmptyDoesNotFabricateATemperature(t *testing.T) {
+	files := sysfsFixture()
+	for key := range files {
+		if strings.HasPrefix(key, "block/sda/device/hwmon/") {
+			delete(files, key)
+		}
+	}
+	writeSysFixture(t, files)
+	writeMountsFixture(t, "")
+	stubFilesystemUsage(t, nil)
+	stubUDisks(t, nil) // UDisks says "unknown"
+
+	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
+	if _, ok := sata.Values["disk.temp0"]; ok {
+		t.Error("a drive with no hwmon and no UDisks temperature must not fabricate a row")
+	}
+}
+
+func TestNVMETempViaUDisksWhenHwmonMissing(t *testing.T) {
+	files := sysfsFixture()
+	for key := range files {
+		if strings.HasPrefix(key, "block/nvme0n1/device/hwmon/") {
+			delete(files, key)
+		}
+	}
+	writeSysFixture(t, files)
+	writeMountsFixture(t, "")
+	stubFilesystemUsage(t, nil)
+	stubUDisks(t, map[string]float64{"nvme0n1": 49.9})
+
+	nvme := driveByModel(t, GetInformations(), "Samsung SSD 990 PRO 2TB")
+	if got := numericValue(t, nvme, "disk.temp0"); math.Abs(got-49.9) > 1e-9 {
+		t.Errorf("NVMe disk.temp0 from UDisks = %v; want 49.9", got)
+	}
+	if got := textValue(t, nvme, tempLabelKeyFor("disk.temp0")); got != "Composite Temperature" {
+		t.Errorf("NVMe UDisks label = %q; want %q", got, "Composite Temperature")
+	}
+}
+
+func TestUDisksFallbackIsPerDrive(t *testing.T) {
+	files := sysfsFixture()
+	for key := range files {
+		if strings.HasPrefix(key, "block/sda/device/hwmon/") || strings.HasPrefix(key, "block/nvme0n1/device/hwmon/") {
+			delete(files, key)
+		}
+	}
+	writeSysFixture(t, files)
+	writeMountsFixture(t, "")
+	stubFilesystemUsage(t, nil)
+	stubUDisks(t, map[string]float64{"sda": 27.0}) // only sda has a value
+
+	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
+	if _, ok := sata.Values["disk.temp0"]; !ok {
+		t.Error("sda should have the UDisks temperature")
+	}
+	nvme := driveByModel(t, GetInformations(), "Samsung SSD 990 PRO 2TB")
+	if _, ok := nvme.Values["disk.temp0"]; ok {
+		t.Error("nvme0n1 with no stub entry must not receive sda's temperature")
+	}
+	shim := driveByModel(t, GetInformations(), "WDC WD40EFRX-68N")
+	if _, ok := shim.Values["disk.temp0"]; ok {
+		t.Error("sdb must not receive any fabricated temperature")
 	}
 }
 

@@ -47,7 +47,7 @@ const gpuIndexColumn = 12
 // metric query fails, and the card would render with no readings at all.
 func queryGPUs() [][]string {
 	query := strings.Join(gpuQueryFields, ",")
-	output := shared.RunShell("nvidia-smi --query-gpu=" + query + " --format=csv,noheader")
+	output := shared.RunCommand("nvidia-smi", "--query-gpu="+query, "--format=csv,noheader")
 	if strings.TrimSpace(output) == "" {
 		log.Println("No output from nvidia-smi --query-gpu (driver installed?)")
 		return nil

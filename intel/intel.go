@@ -60,7 +60,7 @@ func getGPUName(cardIndex int) string {
 	// while the named form gives "Intel Corporation 4th Gen Core Processor
 	// Integrated Graphics Controller" using the pci.ids database.
 	if pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex); pciAddr != "" {
-		line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr))
+		line := strings.TrimSpace(shared.RunCommand("lspci", "-s", pciAddr))
 		if line != "" {
 			if name := parseIntelGPUName(line, deviceID); name != "" {
 				return name

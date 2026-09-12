@@ -41,7 +41,7 @@ func probeAMD() ([]int, error) {
 // the device portion (see cleanGPUName).
 func getGPUName(cardIndex int) string {
 	if pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex); pciAddr != "" {
-		if line := strings.TrimSpace(shared.RunShell("lspci -s " + pciAddr)); line != "" {
+		if line := strings.TrimSpace(shared.RunCommand("lspci", "-s", pciAddr)); line != "" {
 			return cleanGPUName(line)
 		}
 	}
