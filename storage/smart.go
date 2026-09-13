@@ -139,33 +139,88 @@ func fetchSmart(blockName string) (smartInfo, bool) {
 	smartCacheMu.Lock()
 	defer smartCacheMu.Unlock()
 
-	entry := smartCache[blockName]
 	now := time.Now()
+	entry, ok := refreshSmartEntry(smartCache[blockName], blockName, now,
+		readSmartProperties, readSmartAttributes)
+	if !ok {
+		// Nothing answered: drop whatever was cached, including the attributes,
+		// so a drive that disappears leaves no stale rows.
+		smartCache[blockName] = smartCacheEntry{ok: false, propsAt: now}
+		return smartInfo{}, false
+	}
+
+	smartCache[blockName] = entry
+	return entry.info, true
+}
+
+// refreshSmartEntry applies one poll's two SMART reads to a cached entry and
+// reports whether the drive answered at all. It is kept apart from the cache so
+// that the two read schedules can be tested without a bus.
+func refreshSmartEntry(entry smartCacheEntry, blockName string, now time.Time,
+	readProperties func(string, bool) (smartInfo, bool, bool),
+	readAttributes func(string, smartInfo) smartInfo) (smartCacheEntry, bool) {
 
 	if !entry.ok || now.Sub(entry.propsAt) >= smartPropsTTL {
-		info, ok, refreshTried := readSmartProperties(blockName, entry.refreshTried)
-		entry.info = info
-		entry.ok = ok
+		info, ok, refreshTried := readProperties(blockName, entry.refreshTried)
+		if !ok {
+			return smartCacheEntry{}, false
+		}
+		// The properties are the cheap half and the reading is now current, but
+		// this read says nothing about the attributes: their readings are carried
+		// over rather than discarded. Overwriting them here is what made the wear
+		// row disappear on every poll between the two schedules, and the written,
+		// spare and media-error rows would have gone the same way.
+		entry.info = info.withCachedAttributeReadings(entry.info)
+		entry.ok = true
 		entry.refreshTried = refreshTried
 		entry.propsAt = now
-		if !ok {
-			// Nothing answered: drop whatever was cached, including the
-			// attributes, so a drive that disappears leaves no stale rows.
-			smartCache[blockName] = smartCacheEntry{ok: false, propsAt: now}
-			return smartInfo{}, false
-		}
 	}
 
 	// The attribute table is the expensive half, so it is refreshed on its own
 	// (slower) schedule. A failure is remembered too: a drive that refuses the
 	// command must not be asked again on every poll.
 	if now.Sub(entry.attrsAt) >= smartAttrsTTL {
-		entry.info = readSmartAttributes(blockName, entry.info)
+		entry.info = readAttributes(blockName, entry.info)
 		entry.attrsAt = now
 	}
 
-	smartCache[blockName] = entry
-	return entry.info, true
+	return entry, true
+}
+
+// withCachedAttributeReadings returns a freshly read set of SMART properties
+// with the readings that come from the attribute table taken from the cached
+// entry, which is where the last attribute read left them. A drive whose command
+// set changed, or that no longer reports SMART at all, is a different drive and
+// inherits nothing.
+func (info smartInfo) withCachedAttributeReadings(cached smartInfo) smartInfo {
+	if !info.supported || info.isNVMe != cached.isNVMe {
+		return info
+	}
+	if cached.hasLife {
+		info.lifeUsed, info.hasLife = cached.lifeUsed, true
+	}
+	if cached.hasWritten {
+		info.writtenBytes, info.hasWritten = cached.writtenBytes, true
+	}
+	if cached.hasSpare {
+		info.spare, info.spareThreshold, info.hasSpare = cached.spare, cached.spareThreshold, true
+	}
+	if cached.hasMediaErrors {
+		info.mediaErrors, info.hasMediaErrors = cached.mediaErrors, true
+	}
+	return info
+}
+
+// clearAttributeReadings drops the readings that come from the attribute table.
+// A read that fails falls back to this: leaving the previous poll's wear or byte
+// count standing would be the app reporting a figure the drive has not just
+// given.
+func (info smartInfo) clearAttributeReadings() smartInfo {
+	info.lifeUsed, info.hasLife = 0, false
+	info.writtenBytes, info.hasWritten = 0, false
+	info.spare, info.spareThreshold, info.hasSpare = 0, 0, false
+	info.mediaErrors, info.hasMediaErrors = 0, false
+	return info
 }
 
 // --- D-Bus reads -----------------------------------------------------
@@ -349,6 +404,11 @@ var lifeAttributes = []string{
 // its lifetime bytes written. Failures are silent: the properties already
 // collected still describe the drive's health, and these rows are simply absent.
 func readSmartAttributes(blockName string, info smartInfo) smartInfo {
+	// Everything below either replaces the readings carried in from the last
+	// attribute read or leaves them absent, so clear them first: a read that
+	// fails must not leave the previous poll's figures standing as if the drive
+	// had just reported them.
+	info = info.clearAttributeReadings()
 	if !info.supported || !info.updated {
 		return info
 	}

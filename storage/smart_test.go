@@ -3,6 +3,7 @@ package storage
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
 	"github.com/godbus/dbus/v5"
@@ -683,6 +684,184 @@ func TestVariantUint64AndByteRejectOutOfRangeValues(t *testing.T) {
 	tooBig := map[string]dbus.Variant{"v": dbus.MakeVariant(uint64(300))}
 	if _, ok := variantByte(tooBig, "v"); ok {
 		t.Error("a value above 255 must not become a percentage")
+	}
+}
+
+// --- Read schedules --------------------------------------------------
+//
+// The two halves of a drive's SMART reading are re-read on different schedules:
+// the cheap properties every 10s, the attribute table every 60s. These tests
+// drive that transition with a fixed clock and stub readers, because the host's
+// own drive cannot be made to age on demand.
+
+// TestRefreshSmartEntryKeepsAttributeReadingsBetweenPropertyRefreshes is the
+// regression test for rows that disappeared after the first refresh: a property
+// read that overwrote the cached entry dropped the endurance, written, spare and
+// media-error readings the attribute read had contributed, so those rows stayed
+// gone until the attribute table came round again — on the review host the
+// `Life Used` row vanished eleven seconds into a run and only flickered back.
+func TestRefreshSmartEntryKeepsAttributeReadingsBetweenPropertyRefreshes(t *testing.T) {
+	propertiesReads, attributeReads := 0, 0
+	readProperties := func(string, bool) (smartInfo, bool, bool) {
+		propertiesReads++
+		return smartInfo{supported: true, updated: true, powerOnHours: 2959}, true, true
+	}
+	readAttributes := func(_ string, info smartInfo) smartInfo {
+		attributeReads++
+		info.lifeUsed, info.hasLife = 4.21, true
+		return info
+	}
+
+	start := time.Unix(1_700_000_000, 0)
+	entry, ok := refreshSmartEntry(smartCacheEntry{}, "sda", start, readProperties, readAttributes)
+	if !ok {
+		t.Fatal("the first poll must report that the drive answered")
+	}
+	if !entry.info.hasLife {
+		t.Fatal("the first poll must pick up the wear attribute")
+	}
+
+	// Five seconds later neither read is due, and the cached reading is reused.
+	entry, _ = refreshSmartEntry(entry, "sda", start.Add(5*time.Second), readProperties, readAttributes)
+	if !entry.info.hasLife {
+		t.Error("the wear reading was lost on a fully cached poll")
+	}
+
+	// Ten seconds in, the properties are due but the attribute table is not: the
+	// wear reading belongs to the drive, not to the read that happened to fetch
+	// it, so it must survive.
+	entry, _ = refreshSmartEntry(entry, "sda", start.Add(10*time.Second), readProperties, readAttributes)
+	if !entry.info.hasLife || entry.info.lifeUsed != 4.21 {
+		t.Errorf("hasLife = %v, lifeUsed = %v; want the cached 4.21 after a property refresh",
+			entry.info.hasLife, entry.info.lifeUsed)
+	}
+	if entry.info.powerOnHours != 2959 {
+		t.Errorf("powerOnHours = %d; want the property reading", entry.info.powerOnHours)
+	}
+	if attributeReads != 1 {
+		t.Errorf("attribute reads = %d; want 1", attributeReads)
+	}
+	if propertiesReads != 2 {
+		t.Errorf("property reads = %d; want 2", propertiesReads)
+	}
+}
+
+// TestRefreshSmartEntryReplacesAttributeReadingsOnSchedule is the other half:
+// carrying the readings over must not turn into keeping them forever. Once the
+// attribute table is due, what it returns replaces the cached figures.
+func TestRefreshSmartEntryReplacesAttributeReadingsOnSchedule(t *testing.T) {
+	readProperties := func(string, bool) (smartInfo, bool, bool) {
+		return smartInfo{supported: true, updated: true, isNVMe: true}, true, true
+	}
+	readAttributes := func(_ string, info smartInfo) smartInfo {
+		info.lifeUsed, info.hasLife = 4.21, true
+		return info
+	}
+
+	start := time.Unix(1_700_000_000, 0)
+	entry, _ := refreshSmartEntry(smartCacheEntry{}, "nvme0n1", start, readProperties, readAttributes)
+
+	readAttributes = func(_ string, info smartInfo) smartInfo {
+		info.lifeUsed, info.hasLife = 9, true
+		return info
+	}
+	entry, _ = refreshSmartEntry(entry, "nvme0n1", start.Add(smartAttrsTTL), readProperties, readAttributes)
+	if entry.info.lifeUsed != 9 {
+		t.Errorf("lifeUsed = %v; want the refreshed 9", entry.info.lifeUsed)
+	}
+
+	// The attribute reader is what clears its own readings when it cannot read
+	// them, so a drive that stops answering loses those rows instead of showing
+	// the last figures it gave.
+	readAttributes = func(_ string, info smartInfo) smartInfo { return info.clearAttributeReadings() }
+	entry, _ = refreshSmartEntry(entry, "nvme0n1", start.Add(2*smartAttrsTTL), readProperties, readAttributes)
+	if entry.info.hasLife {
+		t.Error("a drive that no longer reports an attribute must lose its reading")
+	}
+}
+
+// TestRefreshSmartEntryDropsTheCacheWhenTheDriveStopsAnswering pins that a drive
+// UDisks2 no longer knows leaves nothing behind for the caller to render.
+func TestRefreshSmartEntryDropsTheCacheWhenTheDriveStopsAnswering(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	cached := smartCacheEntry{
+		info:    smartInfo{supported: true, updated: true, hasLife: true, lifeUsed: 4.21, hasWritten: true, writtenBytes: 1e12},
+		ok:      true,
+		propsAt: start,
+		attrsAt: start,
+	}
+	readProperties := func(string, bool) (smartInfo, bool, bool) { return smartInfo{}, false, true }
+	readAttributes := func(_ string, info smartInfo) smartInfo { return info }
+
+	entry, ok := refreshSmartEntry(cached, "sda", start.Add(smartPropsTTL), readProperties, readAttributes)
+	if ok {
+		t.Error("a drive that stopped answering must not be reported as known")
+	}
+	if entry.info.hasLife || entry.info.hasWritten {
+		t.Errorf("cached readings = %+v; want none once the drive is gone", entry.info)
+	}
+}
+
+// TestWithCachedAttributeReadingsInheritsNothingFromAnotherDrive covers the two
+// ways the cache can hold readings that do not belong to the drive now being
+// read: the command set changed under the same block device, or the drive no
+// longer reports SMART at all.
+func TestWithCachedAttributeReadingsInheritsNothingFromAnotherDrive(t *testing.T) {
+	cached := smartInfo{
+		supported: true, updated: true, isNVMe: false,
+		hasLife: true, lifeUsed: 4.21,
+		hasWritten: true, writtenBytes: 1e12,
+		hasSpare: true, spare: 100, spareThreshold: 10,
+		hasMediaErrors: true, mediaErrors: 7,
+	}
+
+	replaced := smartInfo{supported: true, updated: true, isNVMe: true}
+	if got := replaced.withCachedAttributeReadings(cached); got.hasLife || got.hasWritten || got.hasSpare || got.hasMediaErrors {
+		t.Errorf("an NVMe controller inherited ATA readings: %+v", got)
+	}
+
+	unsupported := smartInfo{supported: false, updated: false}
+	if got := unsupported.withCachedAttributeReadings(cached); got.hasLife || got.hasWritten {
+		t.Errorf("a drive without SMART inherited readings: %+v", got)
+	}
+
+	// And the readings that do belong are carried over field by field, so an
+	// attribute a drive does not report is not invented from the cache.
+	partial := smartInfo{supported: true, updated: true}
+	got := partial.withCachedAttributeReadings(smartInfo{supported: true, hasLife: true, lifeUsed: 4.21})
+	if !got.hasLife || got.lifeUsed != 4.21 {
+		t.Errorf("hasLife = %v, lifeUsed = %v; want the cached 4.21", got.hasLife, got.lifeUsed)
+	}
+	if got.hasWritten || got.hasSpare || got.hasMediaErrors {
+		t.Errorf("absent readings were invented from the cache: %+v", got)
+	}
+}
+
+// TestClearAttributeReadingsDropsOnlyTheAttributeReadings keeps the clearing
+// narrow: the drive's own verdict and its property readings are not attributes
+// and must survive a failed attribute read.
+func TestClearAttributeReadingsDropsOnlyTheAttributeReadings(t *testing.T) {
+	info := smartInfo{
+		supported: true, updated: true, isNVMe: true,
+		failing: true, numFailing: 2, badSectors: 3, hasBadSectors: true,
+		powerOnHours: 2959, temperatureC: 26, hasTemperature: true,
+		selftest: "success", criticalWarnings: []string{"spare"},
+		lifeUsed: 4.21, hasLife: true, writtenBytes: 1e12, hasWritten: true,
+		spare: 100, spareThreshold: 10, hasSpare: true, mediaErrors: 7, hasMediaErrors: true,
+	}
+
+	cleared := info.clearAttributeReadings()
+	if cleared.hasLife || cleared.hasWritten || cleared.hasSpare || cleared.hasMediaErrors {
+		t.Errorf("attribute readings survived: %+v", cleared)
+	}
+	if cleared.lifeUsed != 0 || cleared.writtenBytes != 0 || cleared.spare != 0 || cleared.spareThreshold != 0 || cleared.mediaErrors != 0 {
+		t.Errorf("attribute values survived as stale numbers: %+v", cleared)
+	}
+	if !cleared.failing || cleared.numFailing != 2 || !cleared.hasBadSectors || cleared.badSectors != 3 {
+		t.Errorf("the drive's own verdict was cleared too: %+v", cleared)
+	}
+	if cleared.powerOnHours != 2959 || !cleared.hasTemperature || cleared.selftest != "success" || len(cleared.criticalWarnings) != 1 {
+		t.Errorf("property readings were cleared too: %+v", cleared)
 	}
 }
 

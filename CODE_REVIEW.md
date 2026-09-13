@@ -392,6 +392,22 @@ The following were fixed and are now covered by tests.
     own SSD still shows no `Data Written` row — its SMART table (23 attributes,
     read through both `busctl` and the app) contains no attribute 241.
 
+31. **`Life Used` disappeared after the first refresh** (item 30's follow-up).
+    The SMART cache re-reads a drive's cheap properties every 10 s and its
+    attribute table every 60 s, but the property read replaced the whole cached
+    entry, so the readings the attribute table had contributed were dropped while
+    it was still considered current. On the review host the wear row was present
+    for the first two polls, gone from the third (t = 11 s) until the attribute
+    table came round again a minute later, and then flickered on the same
+    boundary — the written, spare and media-error rows were affected identically,
+    and so was the endurance figure in the verdict's tooltip. The property read
+    now carries the attribute readings over (`withCachedAttributeReadings`), and
+    a failed attribute read clears them (`clearAttributeReadings`) so the fix
+    cannot turn into stale figures: a reading survives the polls it is not
+    re-read in, and no longer than that. The transition is a pure function now
+    (`refreshSmartEntry`), so the two schedules are tested against a fixed clock
+    instead of by waiting on a real drive.
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
