@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/KaiSta/OpenHWInfo/battery"
 	"github.com/KaiSta/OpenHWInfo/memory"
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
@@ -742,6 +743,142 @@ func TestMinMaxCarryTheSameUnitAsTheReading(t *testing.T) {
 		if !strings.HasSuffix(column, " TB") {
 			t.Errorf("%s column = %q; want it to carry the reading's unit (TB)", name, column)
 		}
+	}
+}
+
+// TestBatteryTemplatesOrder pins the reading order of a battery card: what the
+// battery is doing, how full it is, what it holds, how worn it is, and then what
+// its firmware says about itself.
+func TestBatteryTemplatesOrder(t *testing.T) {
+	got := keysOfTemplates(batteryTemplates)
+	want := []string{
+		"battery.status", "battery.capacity",
+		"battery.energy.now", "battery.energy.full", "battery.energy.design",
+		"battery.charge.now", "battery.charge.full", "battery.charge.design",
+		"battery.health", "battery.power",
+		"battery.time.empty", "battery.time.full",
+		"battery.voltage", "battery.voltage.design", "battery.cycles",
+		"battery.model", "battery.manufacturer", "battery.serial",
+		"battery.technology", "battery.ac",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("batteryTemplates has %d rows; want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %q; want %q (full order %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestBatteryTemplatesMatchCollectorKeyContract mirrors the other contract tests
+// for the battery collector: every row must be one the collector can fill, and
+// every reading the collector produces must have a row. The second half runs
+// against the machine's own battery, so it skips on a desktop.
+func TestBatteryTemplatesMatchCollectorKeyContract(t *testing.T) {
+	known := map[string]bool{
+		shared.BatteryStatus.Key:        true,
+		shared.BatteryCharge.Key:        true,
+		shared.BatteryEnergyNow.Key:     true,
+		shared.BatteryEnergyFull.Key:    true,
+		shared.BatteryEnergyDesign.Key:  true,
+		shared.BatteryChargeNow.Key:     true,
+		shared.BatteryChargeFull.Key:    true,
+		shared.BatteryChargeDesign.Key:  true,
+		shared.BatteryHealth.Key:        true,
+		shared.BatteryPower.Key:         true,
+		shared.BatteryTimeEmpty.Key:     true,
+		shared.BatteryTimeFull.Key:      true,
+		shared.BatteryVoltage.Key:       true,
+		shared.BatteryDesignVoltage.Key: true,
+		shared.BatteryCycles.Key:        true,
+		shared.BatteryModel.Key:         true,
+		shared.BatteryManufacturer.Key:  true,
+		shared.BatterySerial.Key:        true,
+		shared.BatteryTechnology.Key:    true,
+		shared.BatteryAC.Key:            true,
+	}
+
+	present := make(map[string]bool, len(batteryTemplates))
+	for _, tpl := range batteryTemplates {
+		if present[tpl.Key] {
+			t.Errorf("key %q has two templates", tpl.Key)
+		}
+		present[tpl.Key] = true
+		if !known[tpl.Key] {
+			t.Errorf("template %q names no key the battery collector writes", tpl.Key)
+		}
+	}
+
+	cards := battery.GetInformations()
+	if len(cards) == 0 {
+		t.Skip("no battery on this host")
+	}
+	for _, card := range cards {
+		for key := range card.Values {
+			if !present[key] {
+				t.Errorf("battery %s reports %q, which has no template and would never be displayed", card.Name, key)
+			}
+		}
+	}
+}
+
+// TestBatteryViewKeepsOnlyReportedRows covers the capacity families: a battery
+// publishes energy (Wh) or charge (Ah), never both, so the other family's rows
+// are templates without a reading behind them.
+func TestBatteryViewKeepsOnlyReportedRows(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		shared.BatteryStatus.Key:    boardLabel("Discharging"),
+		shared.BatteryCharge.Key:    shared.NewHardwareValue(64.0, shared.Percent, shared.Usage),
+		shared.BatteryEnergyNow.Key: shared.NewHardwareValue(30.0, shared.WattHour, shared.Memory),
+		shared.BatteryAC.Key:        boardLabel("Offline"),
+	}
+
+	view := deviceView(shared.HardwareData{Name: "BAT1", Values: values},
+		batteryTemplates, newHistoryStore(), "battery0.")
+
+	if got := keysOfTemplates(view.Keys); !reflect.DeepEqual(got, []string{
+		"battery.status", "battery.capacity", "battery.energy.now", "battery.ac",
+	}) {
+		t.Errorf("rows = %v; want only the reported ones in display order", got)
+	}
+	for _, row := range view.Keys {
+		if strings.HasPrefix(row.Key, "battery.charge.") {
+			t.Errorf("row %q was rendered without a reading", row.Key)
+		}
+	}
+	// The unit travels with the figure, so the row states what it measures.
+	if got := view.Values[shared.BatteryEnergyNow.Key]; got != "30.00 Wh" {
+		t.Errorf("energy now = %q; want %q", got, "30.00 Wh")
+	}
+	if got := view.Values[shared.BatteryCharge.Key]; got != "64.00 %" {
+		t.Errorf("charge = %q; want %q", got, "64.00 %")
+	}
+}
+
+// TestTwoBatteryViewsKeepSeparateHistories is the multi-battery case the collector
+// exists for: a laptop's second battery has its own capacity and its own wear, so
+// the two cards must not share a min/max range.
+func TestTwoBatteryViewsKeepSeparateHistories(t *testing.T) {
+	first := newHistoryStore()
+	second := newHistoryStore()
+
+	spare := deviceView(shared.HardwareData{
+		Name:   "BAT0",
+		Values: map[string]shared.HardwareValue{shared.BatteryCharge.Key: shared.NewHardwareValue(12.0, shared.Percent, shared.Usage)},
+	}, batteryTemplates, first, "battery0.")
+
+	charged := deviceView(shared.HardwareData{
+		Name:   "BAT1",
+		Values: map[string]shared.HardwareValue{shared.BatteryCharge.Key: shared.NewHardwareValue(97.0, shared.Percent, shared.Usage)},
+	}, batteryTemplates, second, "battery1.")
+
+	if got := spare.MaxValues[shared.BatteryCharge.Key]; got != "12.00 %" {
+		t.Errorf("BAT0 max = %q; want its own reading", got)
+	}
+	if got := charged.MaxValues[shared.BatteryCharge.Key]; got != "97.00 %" {
+		t.Errorf("BAT1 max = %q; want its own reading", got)
 	}
 }
 

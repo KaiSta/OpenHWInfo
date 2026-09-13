@@ -27,6 +27,9 @@ and the frontend calls the bound `App.GetData` method directly.
     `/proc/mounts` plus `statfs` for how full its filesystems are.
   - `memory` — `/proc/meminfo` for RAM and swap, plus `/proc/pressure/memory`
     for the kernel's pressure-stall averages where the kernel provides them.
+  - `battery` — `/sys/class/power_supply` for a laptop's batteries, their
+    adapters and their wear. It reports one card per battery, because a laptop
+    can carry more than one.
 - **`shared`** — `HardwareValue`/`HardwareData` types, key templates, the
   sysfs/shell helpers used by the vendor packages, the DRM card scan
   (`ProbeDRMCards`, `DRMCardDevicePath`, `ResolvePCIDevice`), the identity-probe
@@ -463,6 +466,55 @@ The following were fixed and are now covered by tests.
     and `ParsePower` covers a fractional wattage, a sub-watt reading and a zero
     divisor.
 
+34. **Laptops had no battery card at all.** A hardware monitor on a laptop left
+    out the one reading its user cares about most away from a socket, so
+    `battery` is a new collector over `/sys/class/power_supply`: the kernel's
+    power supply class, which needs no external tool and nothing from the
+    firmware's own interface. A handful of decisions are worth recording.
+    - **One card per battery**, like drives, and for the same reason: a laptop can
+      carry two packs — a fixed internal one plus a removable or ultrabay one —
+      with unrelated capacities and unrelated wear, and a single combined card
+      could not state either. Each card keeps its own min/max history, keyed by
+      its own prefix, so a second pack cannot inherit the first's range.
+    - **A battery is a supply whose `type` is `Battery` *and* whose scope is the
+      system.** A wireless mouse or headset reports a battery too, under scope
+      `Device`; a kernel that publishes no scope is taken at its word, since its
+      absence is not a claim that the supply belongs to a peripheral. A supply
+      whose type cannot be read is skipped, because guessing it is a battery
+      would put the mains adapter on a battery card. An empty battery bay
+      (`present` 0) is skipped as well: the bay exists, the battery does not.
+    - **The two capacity families are kept apart.** Most firmware reports energy
+      (Wh), some report charge (Ah), and the kernel exposes whichever it gets.
+      Rows exist for both families and only the one the battery publishes is
+      filled, so a `Charge Now` row can never be labelled in Wh or vice versa:
+      the unit travels on the reading. Converting between the families would need
+      the pack voltage and would produce a different number from the one the
+      firmware reports, so it is not done.
+    - **The health verdict compares what the battery holds when full against what
+      it was designed to hold**, and it is the only rule: at or above 80% is
+      `Good`, below that `Worn`, below 50% `Poor`. The figures behind it — the
+      percentages and the Wh or Ah they came from, with the charge-cycle count —
+      travel in the tooltip whether the verdict is good or bad. A battery whose
+      firmware publishes no design capacity gets **no badge**, because there
+      would be nothing to compare it against and an invented verdict is worse
+      than none.
+    - **The AC adapter state is read from the supplies that actually deliver the
+      mains**: a `Mains` type or one of the USB charger types, since a USB-C
+      supply is how current laptops charge. A UPS is deliberately excluded — it
+      reports itself online while it runs the machine off its own battery, so
+      counting it would report an adapter that is not plugged in. An adapter
+      whose state cannot be read produces no row rather than an "Offline" claim.
+    - **Time to empty or full is only estimated where the arithmetic is exact**:
+      energy over power, while the battery is actually discharging or charging.
+      A charge-family battery gets no estimate (Ah cannot be divided by watts
+      without the voltage), a full battery on the mains gets none either since it
+      moves no power in either direction, and a zero power reading stays a
+      reading in the table rather than being dropped.
+    - Absent is still never zero: `capacity`, `power_now`, the cycle count and
+      the identity fields each produce a row only when they could be read, so a
+      battery that publishes little shows little. A supply that reports nothing
+      but its type is not given a card at all.
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
@@ -486,6 +538,7 @@ The following were fixed and are now covered by tests.
 | `intel`    | sysfs-mocked single/multi-card collection with an exact name assertion, PCI ID mapping (Arc incl. Battlemage, integrated GPUs must not be named Arc, non-GPU IDs resolve to nothing), table integrity rules, name cleaning, rejection of identifier-only input, and a fallback that always yields a usable name |
 | `mainboard`| sysfs-mocked DMI identity (including a blank/root-only field producing no row), board-zone selection and millidegree conversion, Super I/O temperatures and fans with and without driver labels, chip-name allowlist, sensor caps, unparsable readings |
 | `memory`   | `/proc/meminfo` parsing (KiB→GiB, unit strip, unparsable fields skipped), the `free`-style used figure from `MemAvailable`, the pre-3.14 fallback, swap omitted when unconfigured or half-reported, PSI `some`/`full` averages, malformed PSI lines producing no rows, and every row's presence *and* unit |
+| `battery`  | power_supply-mocked battery listing: an energy (Wh) pack with every field, a charge (Ah) pack that must produce the other family's rows and no time estimate, two packs as two cards in supply-name order, absent and unparsable fields producing no rows, an empty bay (`present` 0), a peripheral's battery (scope `Device`) and a kernel that reports no scope, a supply with no readable type, a desktop, the AC row for mains/USB-C/unreadable-supply/absent-adapter and the UPS exclusion, the health thresholds with a battery below each, no design capacity meaning no verdict, and the time estimate in each direction |
 | `storage`  | sysfs-mocked drive listing (SATA SSD, NVMe, HDD, and the virtual/optical devices that must not appear), medium and capacity from the rotational flag and sector count, NVMe labels vs a drivetemp chip, rejection of a non-drive hwmon chip, partition-to-disk mapping with a mount-table fixture and a stubbed `statfs` (aggregation, duplicate mounts, an unmappable `dm-0`, an escaped space, a failing lookup, a missing mount table); SMART: every health rule as its own case (a healthy drive with exactly one reading broken), Kelvin and wire-type decoding for both interfaces, the life-attribute allowlist and its threshold scaling, the fabrication guards (absent bad-sector count, never-read drive, empty NVMe dictionary), every row's presence *and* unit, and the row→template contract |
 | `shared`   | frequency/power conversion, `ReadSysFile` absence vs zero, glob lookup, DRM vendor-matched card scan, PCI address resolution, identity-probe memoization (compute-once, independent keys, cached empty result, reset), the `-debug` logging gate |
 | `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, and the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows) |
@@ -699,3 +752,25 @@ These are known limitations rather than defects, listed roughly by value.
    `smartctl`'s `drivedb` does, is the only reliable fix and needs a table this
    project has no way to verify without the drives; the app's own host reports no
    241 at all, so even the common case could not be checked live here.
+
+22. **The charge (Ah) battery family is fixture-tested only.** The review laptop
+   reports energy in Wh, so the live battery card exercises the Wh path only: the
+   `charge_now`/`charge_full` rows, their Ah unit and the deliberate absence of a
+   time estimate are covered by fixtures in the shapes the kernel documents. Both
+   families come from the same `power_supply` attributes and differ only in which
+   ones exist, but a machine that reports charge could still expose a combination
+   the fixtures do not anticipate. A second pack is in the same position — this
+   laptop has one battery, so the two-card case rests on fixtures and on the
+   per-card history scoping that the drives already exercised.
+
+23. **The battery card reports one AC adapter state per battery.** With two packs
+   the same adapter row appears twice, which is harmless but redundant. A single
+   power card carrying the adapter, the combined time to empty and the wear of
+   every pack would say more than the per-battery cards can, at the cost of
+   duplicating the capacity rows it aggregates.
+
+24. **Nothing on the battery card warns before the pack is nearly flat.** The
+   charge is displayed and coloured, but there is no notification and no tray
+   state, so a laptop left on battery is only noticed by looking at the window —
+   the same gap the drive verdict has, and the same fix (a Go-side poll that
+   keeps running while the window is hidden) would close both.

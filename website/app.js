@@ -27,6 +27,17 @@ function temperatureLimit(key) {
     return 100;
 }
 
+// A percentage that is better the higher it is, with the bottom of its range as
+// the alarming end: a battery running flat and a drive's exhausted spare pool
+// are both "plug it in / replace it" readings rather than load figures.
+function betterHigher(percent) {
+    var f = Math.max(0, Math.min(1, percent / 100));
+    return {
+        pct: Math.round(f * 100),
+        cls: f < 0.15 ? "bad" : (f < 0.3 ? "warn" : "good")
+    };
+}
+
 // Decide a 0..1 fraction + color class for a metric, using the card's
 // full value map so sibling metrics (e.g. vram.total) are available.
 function gauge(key, valStr, values) {
@@ -46,16 +57,13 @@ function gauge(key, valStr, values) {
     // A drive's consumed endurance behaves like a usage figure: more is worse.
     if (/life/i.test(key)) return frac(val, 100);
 
-    // Spare capacity is the one reading that is better the higher it is, so it
-    // needs its own scale: a drive whose spare pool is nearly gone is the drive
-    // about to fail, and a full pool is not a drive at 100% load.
-    if (/spare/i.test(key)) {
-        var spare = Math.max(0, Math.min(1, val / 100));
-        return {
-            pct: Math.round(spare * 100),
-            cls: spare < 0.15 ? "bad" : (spare < 0.3 ? "warn" : "good")
-        };
-    }
+    // How full a battery is runs the other way from a load figure.
+    if (/battery\.capacity/i.test(key)) return betterHigher(val);
+
+    // Spare capacity is the other reading that is better the higher it is: a
+    // drive whose spare pool is nearly gone is the drive about to fail, and a
+    // full pool is not a drive at 100% load.
+    if (/spare/i.test(key)) return betterHigher(val);
 
     if (/power/i.test(key)) {
         var max = num(values["gpu.power.max"]) || val;
@@ -749,6 +757,36 @@ function render(data) {
             signature: [title, subtitle, keys.map(keyOf).join(",")].join("|"),
             create: function () {
                 var card = buildCardShell("/resources/disk.png", title, subtitle);
+                updateMetrics(card.querySelector("tbody"), keys, labels,
+                    values, minValues, maxValues);
+                updateStatus(card, status);
+                return card;
+            },
+            update: function (card) {
+                updateMetrics(card.querySelector("tbody"), keys, labels,
+                    values, minValues, maxValues);
+                updateStatus(card, status);
+            }
+        });
+    });
+
+    // Batteries are one card each for the same reason drives are: a laptop can
+    // carry more than one, and each pack has its own capacity and its own wear.
+    // The card head carries the health verdict the collector derived from them.
+    (data.BatteryViews || []).forEach(function (battery, index) {
+        var values = battery.Values || {};
+        var minValues = battery.MinValues || {};
+        var maxValues = battery.MaxValues || {};
+        var keys = battery.Keys || [];
+        var labels = labelsOf(keys);
+        var title = battery.Name;
+        var subtitle = "Battery · " + keys.length + " metrics";
+        var status = battery.Status || null;
+        specs.push({
+            key: "battery" + index,
+            signature: [title, subtitle, keys.map(keyOf).join(",")].join("|"),
+            create: function () {
+                var card = buildCardShell("/resources/battery.svg", title, subtitle);
                 updateMetrics(card.querySelector("tbody"), keys, labels,
                     values, minValues, maxValues);
                 updateStatus(card, status);

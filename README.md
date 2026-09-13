@@ -201,3 +201,21 @@ Each row's unit is rendered from the reading itself rather than written into the
 One caveat belongs with those rows rather than in a footnote: attribute 241's *unit* is the vendor's, and the two conventions in use differ by a factor of 65536. The app always takes the sector convention the ATA standard specifies — the SMART library's own `MB` figure is built from that same counter with the 32 MiB-unit assumption already applied, so it is divided back out rather than read as megabytes of data — but a drive that genuinely counts in 32 MiB units cannot be told apart from a slow, lightly used one, and so is under-reported rather than reported too large. A drive that reports no counter gets no row, because a reported zero and an absent one are indistinguishable and `0.00 TB` would be the app's claim rather than the drive's.
 
 Readings are passive: the attribute table is read at most once a minute and with UDisks2's `nowakeup` option, so a sleeping drive answers with an error rather than being spun up. If udisksd is not running, or reports that a drive has no SMART, the card simply has no badge and no SMART rows.
+
+## Battery infos
+
+`/sys/class/power_supply` — one card per battery, no root required, on a laptop
+
+* **Status** — the kernel's own word: `Charging`, `Discharging`, `Full`, `Not charging` or `Unknown`.
+* **Charge** — the percentage the firmware reports, drawn with a bar that runs the opposite way from a load bar: a nearly empty pack is the alarming end, so it turns red rather than green.
+* **Energy Now**, **Energy Full** and **Energy Design** in Wh, or **Charge Now**, **Charge Full** and **Charge Design** in Ah. Most firmware reports energy and some reports charge; only the family the battery publishes appears, and the unit on the reading says which it is. The two are never converted into each other, because that needs the pack voltage and would give a different figure from the one the battery reports.
+* **Health** — what the battery holds when full against what it was designed to hold.
+* **Power Draw** in W, **Voltage** and **Design Voltage**, **Charge Cycles**, and **Time to Empty** or **Time to Full**.
+* **AC Adapter** — `Online` or `Offline`, read from the supply that actually delivers the mains: a `Mains` adapter or one of the USB charger types, since a USB-C supply is how most current laptops charge. A UPS is deliberately not counted — it reports itself online while it runs the machine from its own battery — and an adapter whose state cannot be read produces no row rather than an `Offline` claim.
+* Identity: model, manufacturer, serial number and battery technology.
+
+Each card carries a health badge beside its title — `Health: Good`, `Health: Worn` or `Health: Poor` — with the figures behind the verdict in its tooltip: the percentages, the Wh or Ah they came from, and the charge-cycle count. The thresholds are 80% and 50% of the design capacity. A battery whose firmware publishes no design capacity gets **no badge**, because there would be nothing to compare it against and an invented verdict would be worse than none.
+
+A laptop can have **more than one battery** — an internal pack plus a removable one, or one in an ultrabay — and each gets its own card, titled with the supply name the kernel lists (`BAT0`, `BAT1`), with its own capacity, its own wear and its own min/max history. A battery bay with the pack removed (`present` is 0) is not reported, and neither is a peripheral's battery: a wireless mouse or headset reports one too, under scope `Device`. A supply whose type cannot be read is skipped rather than assumed to be a battery, so a mains adapter can never end up on a battery card.
+
+Nothing is derived that the firmware did not state. A reading that cannot be taken produces no row rather than a zero, a battery that publishes almost nothing shows almost nothing, and time to empty or full is only estimated where the arithmetic is exact — energy over power, while the battery is actually discharging or charging. A charge-family battery gets no estimate, because Ah cannot be divided by watts without the voltage; a full battery on the mains gets none either, since it moves no power in either direction.

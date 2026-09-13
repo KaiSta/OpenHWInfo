@@ -34,6 +34,15 @@ const (
 	// as "GB" would make the two disagree by 7% on every machine, so the units
 	// stay distinct.
 	Gibibyte
+	// WattHour and AmpereHour are the two ways a battery's firmware reports how
+	// much it holds: most laptops publish energy (Wh), some publish charge (Ah)
+	// instead, and the kernel exposes whichever it gets. They are separate units
+	// because a value must be read with the quantity it actually is — the unit on
+	// the reading is what says which of the two the firmware is quoting.
+	WattHour
+	AmpereHour
+	// Volt is a battery's voltage.
+	Volt
 )
 
 // Suffix is the unit text shown beside a value, and the only place a unit
@@ -67,6 +76,12 @@ func (u HardwareUnit) Suffix() string {
 		return "h"
 	case Gibibyte:
 		return "GiB"
+	case WattHour:
+		return "Wh"
+	case AmpereHour:
+		return "Ah"
+	case Volt:
+		return "V"
 	}
 	// UnknownUnit carries no text, and an unrecognised unit is not guessed at.
 	return ""

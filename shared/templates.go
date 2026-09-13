@@ -86,6 +86,48 @@ var (
 	MemPressureFull = KeyTemplate{"Memory Pressure (full)", "mem.pressure.full"}
 )
 
+// Battery template variables. A battery card is one card per battery, so these
+// keys repeat across cards the way a drive's do; each card carries its own
+// values and its own history, and a row is listed only by the battery that
+// reports it.
+//
+// The amount of energy a battery holds arrives in one of two quantities
+// depending on its firmware — energy (Wh) or charge (Ah) — so both families have
+// rows and only the one the battery reports is ever filled. The unit on the
+// reading then says which it is, instead of a single "Capacity" row quietly
+// changing meaning between machines.
+var (
+	BatteryStatus = KeyTemplate{"Status", "battery.status"}
+	BatteryCharge = KeyTemplate{"Charge", "battery.capacity"}
+	BatteryHealth = KeyTemplate{"Health", "battery.health"}
+
+	BatteryEnergyNow    = KeyTemplate{"Energy Now", "battery.energy.now"}
+	BatteryEnergyFull   = KeyTemplate{"Energy Full", "battery.energy.full"}
+	BatteryEnergyDesign = KeyTemplate{"Energy Design", "battery.energy.design"}
+
+	BatteryChargeNow    = KeyTemplate{"Charge Now", "battery.charge.now"}
+	BatteryChargeFull   = KeyTemplate{"Charge Full", "battery.charge.full"}
+	BatteryChargeDesign = KeyTemplate{"Charge Design", "battery.charge.design"}
+
+	// Time to empty or full is derived from the energy the battery holds and the
+	// power it is moving, so it is only reported while the battery is actually
+	// discharging or charging — a full battery on the mains is neither.
+	BatteryTimeEmpty = KeyTemplate{"Time to Empty", "battery.time.empty"}
+	BatteryTimeFull  = KeyTemplate{"Time to Full", "battery.time.full"}
+
+	BatteryPower         = KeyTemplate{"Power Draw", "battery.power"}
+	BatteryVoltage       = KeyTemplate{"Voltage", "battery.voltage"}
+	BatteryDesignVoltage = KeyTemplate{"Design Voltage", "battery.voltage.design"}
+	BatteryCycles        = KeyTemplate{"Charge Cycles", "battery.cycles"}
+	BatteryTechnology    = KeyTemplate{"Technology", "battery.technology"}
+	BatteryModel         = KeyTemplate{"Model", "battery.model"}
+	BatteryManufacturer  = KeyTemplate{"Manufacturer", "battery.manufacturer"}
+	BatterySerial        = KeyTemplate{"Serial Number", "battery.serial"}
+	// BatteryAC is the state of the external supply, which is what makes a
+	// battery that is neither charging nor discharging readable.
+	BatteryAC = KeyTemplate{"AC Adapter", "battery.ac"}
+)
+
 // GPU template variables
 var (
 	GPUName          = KeyTemplate{"GPU Name", "name"}

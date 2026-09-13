@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/KaiSta/OpenHWInfo/amd"
+	"github.com/KaiSta/OpenHWInfo/battery"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
 	"github.com/KaiSta/OpenHWInfo/intel"
 	"github.com/KaiSta/OpenHWInfo/mainboard"
@@ -64,6 +65,10 @@ type Data struct {
 	// /proc/meminfo cannot be read, which is the only way a Linux system has no
 	// memory to report.
 	Memory *DeviceView
+	// BatteryViews holds one card per battery: a laptop can have more than one,
+	// and each has its own capacity and its own wear. It is empty on a machine
+	// with no battery, which is every desktop.
+	BatteryViews []DeviceView
 }
 
 // cpuKeyTemplates assembles the CPU rows in display order: identity fields, one
@@ -228,6 +233,38 @@ var memTemplates = []shared.KeyTemplate{
 	shared.MemPressureFull,
 }
 
+// batteryTemplates are the rows of a battery card, in display order: what the
+// battery is, how full it is, what it holds, how worn it is and what its
+// firmware says about it.
+//
+// Both capacity families are listed because a battery reports one of them —
+// energy (Wh) or charge (Ah) — and deviceView drops the rows that carry no
+// reading, so only the family this battery publishes reaches the table. A
+// battery reports a fixed set of fields, so unlike a drive's sensor rows these
+// need no generation from the collected values.
+var batteryTemplates = []shared.KeyTemplate{
+	shared.BatteryStatus,
+	shared.BatteryCharge,
+	shared.BatteryEnergyNow,
+	shared.BatteryEnergyFull,
+	shared.BatteryEnergyDesign,
+	shared.BatteryChargeNow,
+	shared.BatteryChargeFull,
+	shared.BatteryChargeDesign,
+	shared.BatteryHealth,
+	shared.BatteryPower,
+	shared.BatteryTimeEmpty,
+	shared.BatteryTimeFull,
+	shared.BatteryVoltage,
+	shared.BatteryDesignVoltage,
+	shared.BatteryCycles,
+	shared.BatteryModel,
+	shared.BatteryManufacturer,
+	shared.BatterySerial,
+	shared.BatteryTechnology,
+	shared.BatteryAC,
+}
+
 // historyStore is a mutex-guarded min/max history for one device family.
 // The poll path is synchronous today, but Wails does not guarantee that
 // GetData is never called concurrently, so a plain map would be a race
@@ -249,11 +286,12 @@ func (h *historyStore) updateAndCalculate(currentValues map[string]shared.Hardwa
 
 // Global stores to track historical values for min/max calculations.
 var (
-	cpuHistory    = newHistoryStore()
-	gpuHistory    = newHistoryStore()
-	diskHistory   = newHistoryStore()
-	boardHistory  = newHistoryStore()
-	memoryHistory = newHistoryStore()
+	cpuHistory     = newHistoryStore()
+	gpuHistory     = newHistoryStore()
+	diskHistory    = newHistoryStore()
+	boardHistory   = newHistoryStore()
+	memoryHistory  = newHistoryStore()
+	batteryHistory = newHistoryStore()
 )
 
 // App is the main application struct.
@@ -318,6 +356,14 @@ func (a *App) GetData() Data {
 		}
 	}
 
+	// Each battery is its own card, like a drive: a laptop can carry more than
+	// one, and their capacities and wear are unrelated. The history is scoped per
+	// battery for the same reason.
+	var batteryViews []DeviceView
+	for batteryIdx, batteryData := range battery.GetInformations() {
+		batteryViews = append(batteryViews, deviceView(batteryData, batteryTemplates, batteryHistory, fmt.Sprintf("battery%d.", batteryIdx)))
+	}
+
 	// The machine's memory is a single device as well.
 	var memoryView *DeviceView
 	if memoryData := memory.GetInformations(); len(memoryData.Values) > 0 {
@@ -356,6 +402,7 @@ func (a *App) GetData() Data {
 		CpuMaxValues: cpuMaxValues,
 		Board:        board,
 		Memory:       memoryView,
+		BatteryViews: batteryViews,
 	}
 }
 
