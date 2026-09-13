@@ -1,6 +1,9 @@
 package cpuinfo
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
@@ -12,7 +15,7 @@ func numeric(t *testing.T, temps map[string]interface{}, key string) float64 {
 	t.Helper()
 	raw, ok := temps[key]
 	if !ok {
-		t.Fatalf("key %q missing from parsed sensor output (got keys %v)", key, keysOf(temps))
+		t.Fatalf("key %q missing from parsed temperatures (got keys %v)", key, keysOf(temps))
 	}
 	hv := shared.NewHardwareValue(raw, shared.Celsius, shared.Temperature)
 	got, err := hv.GetNumericValue()
@@ -30,51 +33,86 @@ func keysOf(m map[string]interface{}) []string {
 	return out
 }
 
-func TestParseSensorOutputIntelCoretemp(t *testing.T) {
-	lines := []string{
-		"coretemp-isa-0000",
-		"Adapter: ISA adapter",
-		"Package id 0:  +45.0°C  (high = +80.0°C, crit = +100.0°C)",
-		"Core 0:        +43.0°C  (high = +80.0°C, crit = +100.0°C)",
-		"Core 1:        +44.0°C  (high = +80.0°C, crit = +100.0°C)",
-		"pch_cannonlake-virtual-0",
-		"Adapter: Virtual device",
-		"temp1:        +48.0°C",
+// writeHWMonFixture creates the given files under a temporary sysfs root and
+// points the collector at it for the duration of the test.
+func writeHWMonFixture(t *testing.T, files map[string]string) {
+	t.Helper()
+
+	root := t.TempDir()
+	for path, content := range files {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("failed to create %s: %v", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", full, err)
+		}
 	}
 
-	temps := parseSensorOutput(lines)
+	original := sysDir
+	sysDir = root
+	t.Cleanup(func() { sysDir = original })
+}
+
+func TestCPUIntelCoretempTemperatures(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "coretemp",
+		"class/hwmon/hwmon0/temp1_label": "Package id 0",
+		"class/hwmon/hwmon0/temp1_input": "45000",
+		"class/hwmon/hwmon0/temp2_label": "Core 0",
+		"class/hwmon/hwmon0/temp2_input": "43000",
+		"class/hwmon/hwmon0/temp3_label": "Core 1",
+		"class/hwmon/hwmon0/temp3_input": "44000",
+
+		// Other components' chips expose temperatures too, but they belong to
+		// their own cards and must not leak onto the CPU card.
+		"class/hwmon/hwmon1/name":        "amdgpu",
+		"class/hwmon/hwmon1/temp1_label": "edge",
+		"class/hwmon/hwmon1/temp1_input": "61000",
+		"class/hwmon/hwmon2/name":        "nvme",
+		"class/hwmon/hwmon2/temp1_input": "38000",
+	})
+
+	temps := cpuTemperatures()
 
 	checks := map[string]float64{
-		// coretemp's "Package id 0" IS the CPU temperature and must bind to
-		// the cpu.temp key the frontend template looks up; the per-core sensors
-		// get canonical cpu.coreTempN keys in the order they appear.
+		// coretemp's "Package id 0" IS the CPU temperature and must bind to the
+		// cpu.temp key the frontend template looks up; the per-core sensors get
+		// canonical cpu.coreTempN keys in sensor-number order.
 		"cpu.temp":      45,
 		"cpu.coreTemp0": 43,
 		"cpu.coreTemp1": 44,
-		"cpu.pch":       48,
 	}
 	for key, want := range checks {
 		if got := numeric(t, temps, key); got != want {
 			t.Errorf("%s = %v; want %v", key, got, want)
 		}
 	}
+
+	if _, exists := temps["cpu.pch"]; exists {
+		t.Errorf("unexpected cpu.pch entry on a machine with no PCH chip: %v", temps["cpu.pch"])
+	}
+	for key := range temps {
+		if key != "cpu.temp" && key != "cpu.coreTemp0" && key != "cpu.coreTemp1" {
+			t.Errorf("unexpected key %q in %v", key, temps)
+		}
+	}
 }
 
-func TestParseSensorOutputAMDK10temp(t *testing.T) {
-	lines := []string{
-		"k10temp-pci-00c3",
-		"Adapter: PCI adapter",
-		"Tctl:         +65.0°C",
-		"Tccd1:        +60.0°C",
-		"Tccd2:        +61.0°C",
-	}
+func TestCPUAMDK10tempTemperatures(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "k10temp",
+		"class/hwmon/hwmon0/temp1_label": "Tctl",
+		"class/hwmon/hwmon0/temp1_input": "65000",
+		"class/hwmon/hwmon0/temp3_label": "Tccd1",
+		"class/hwmon/hwmon0/temp3_input": "60000",
+	})
 
-	temps := parseSensorOutput(lines)
+	temps := cpuTemperatures()
 
 	checks := map[string]float64{
 		"cpu.temp": 65,
 		"tccd0":    60,
-		"tccd1":    61,
 	}
 	for key, want := range checks {
 		if got := numeric(t, temps, key); got != want {
@@ -82,50 +120,217 @@ func TestParseSensorOutputAMDK10temp(t *testing.T) {
 		}
 	}
 
-	// The third Tccd sensor is named tccd2, not tccd3.
-	if _, exists := temps["tccd3"]; exists {
-		t.Errorf("unexpected tccd3 entry: %v", temps["tccd3"])
-	}
-}
-
-// TestParseSensorOutputCapsTccdSensors verifies the sensor count is bounded so
-// that an unusually chatty chipset cannot produce unbounded keys.
-func TestParseSensorOutputCapsTccdSensors(t *testing.T) {
-	var lines []string
-	for i := 1; i <= 8; i++ {
-		lines = append(lines, "Tccd"+string(rune('0'+i))+":        +6"+string(rune('0'+i%10))+"0.0°C")
-	}
-
-	temps := parseSensorOutput(lines)
-
-	for i := 0; i < 6; i++ {
-		key := "tccd" + string(rune('0'+i))
-		if _, ok := temps[key]; !ok {
-			t.Errorf("expected %s to be present", key)
+	// The CCD rows are numbered in sensor order, not after their label's number:
+	// the first Tccd sensor is tccd0, so tccd1 and tccd3 must be absent.
+	for _, absent := range []string{"tccd1", "tccd3"} {
+		if _, exists := temps[absent]; exists {
+			t.Errorf("unexpected %s entry: %v", absent, temps[absent])
 		}
 	}
-	if _, ok := temps["tccd6"]; ok {
-		t.Errorf("expected sensors beyond the sixth to be ignored")
+}
+
+// TestCPUTccdSensorsAreCapped verifies the sensor count is bounded so that an
+// unusually chatty chip cannot produce unbounded keys.
+func TestCPUTccdSensorsAreCapped(t *testing.T) {
+	files := map[string]string{"class/hwmon/hwmon0/name": "k10temp"}
+	for i := 1; i <= 8; i++ {
+		files[tempLabelPath(0, i)] = "Tccd" + itoa(i)
+		files[tempInputPath(0, i)] = "60000"
+	}
+	writeHWMonFixture(t, files)
+
+	temps := cpuTemperatures()
+
+	for i := 0; i < maxTccdSensors; i++ {
+		if _, ok := temps["tccd"+itoa(i)]; !ok {
+			t.Errorf("expected tccd%d to be present, got keys %v", i, keysOf(temps))
+		}
+	}
+	if _, ok := temps["tccd"+itoa(maxTccdSensors)]; ok {
+		t.Errorf("expected CCD sensors beyond the cap to be ignored")
 	}
 }
 
-// TestParseSensorOutputMalformedDoesNotPanic is a regression test: lines without
-// a colon, a trailing "pch" line and a bare "CPU" marker must be skipped rather
-// than causing an index-out-of-range panic.
-func TestParseSensorOutputMalformedDoesNotPanic(t *testing.T) {
-	lines := []string{
-		"CPU",
-		"Core without any colon",
-		"pch",
-		"",
-		"Tccd",
-	}
+func TestCPUPCHTemperature(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "pch_cannonlake",
+		"class/hwmon/hwmon0/temp1_input": "48000",
+		"class/hwmon/hwmon1/name":        "coretemp",
+		"class/hwmon/hwmon1/temp1_label": "Package id 0",
+		"class/hwmon/hwmon1/temp1_input": "47000",
+	})
 
-	temps := parseSensorOutput(lines)
+	temps := cpuTemperatures()
+
+	if got := numeric(t, temps, "cpu.pch"); got != 48 {
+		t.Errorf("cpu.pch = %v; want 48", got)
+	}
+	if got := numeric(t, temps, "cpu.temp"); got != 47 {
+		t.Errorf("cpu.temp = %v; want 47", got)
+	}
+}
+
+// TestCPUTemperaturesFollowSensorNumberOrder pins the ordering: glob returns
+// temp10 before temp2, so without the numeric sort the per-core ordinals would
+// silently swap on a machine with more than nine sensors.
+func TestCPUTemperaturesFollowSensorNumberOrder(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":         "coretemp",
+		"class/hwmon/hwmon0/temp2_label":  "Core 1",
+		"class/hwmon/hwmon0/temp2_input":  "44100",
+		"class/hwmon/hwmon0/temp10_label": "Core 2",
+		"class/hwmon/hwmon0/temp10_input": "45100",
+	})
+
+	temps := cpuTemperatures()
+
+	if got := numeric(t, temps, "cpu.coreTemp0"); got != 44.1 {
+		t.Errorf("cpu.coreTemp0 = %v; want 44.1 (temp2 must be read before temp10)", got)
+	}
+	if got := numeric(t, temps, "cpu.coreTemp1"); got != 45.1 {
+		t.Errorf("cpu.coreTemp1 = %v; want 45.1", got)
+	}
+}
+
+// TestCPUUnlabelledFirstSensorBindsCPUTemp covers the drivers that report no
+// labels at all (older k10temp, ARM's cpu_thermal): their first sensor is the
+// package reading.
+func TestCPUUnlabelledFirstSensorBindsCPUTemp(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "k10temp",
+		"class/hwmon/hwmon0/temp1_input": "55000",
+	})
+
+	temps := cpuTemperatures()
+
+	if got := numeric(t, temps, "cpu.temp"); got != 55 {
+		t.Errorf("cpu.temp = %v; want 55", got)
+	}
+}
+
+// TestCPUUnreadableSensorsAreSkipped verifies a sensor file that is not a number
+// produces no row rather than a bogus zero reading.
+func TestCPUUnreadableSensorsAreSkipped(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "coretemp",
+		"class/hwmon/hwmon0/temp1_label": "Package id 0",
+		"class/hwmon/hwmon0/temp1_input": "not a number",
+		"class/hwmon/hwmon0/temp2_label": "Core 0",
+		"class/hwmon/hwmon0/temp2_input": "",
+	})
+
+	temps := cpuTemperatures()
 
 	if len(temps) != 0 {
-		t.Errorf("expected no values from malformed input, got %v", temps)
+		t.Errorf("expected unreadable sensors to produce no rows, got %v", temps)
 	}
+}
+
+func TestCPUNoHwmonChips(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "nct6798",
+		"class/hwmon/hwmon0/temp2_label": "CPUTIN",
+		"class/hwmon/hwmon0/temp2_input": "44000",
+	})
+
+	if temps := cpuTemperatures(); len(temps) != 0 {
+		t.Errorf("expected a board chip's CPUTIN label not to become the CPU temperature, got %v", temps)
+	}
+}
+
+// TestGetInformationsKeepsIdentityWithoutCPUHwmonChip is the regression test for
+// the behaviour this collector used to have: when lm-sensors was not installed,
+// the ENTIRE CPU card disappeared. Identity and clocks come from /proc/cpuinfo
+// and must survive a machine that exposes no CPU temperature sensor.
+func TestGetInformationsKeepsIdentityWithoutCPUHwmonChip(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "amdgpu",
+		"class/hwmon/hwmon0/temp1_input": "61000",
+	})
+
+	data := GetInformations()
+
+	for _, key := range []string{cpuVendorIDKey, cpuBrandKey, cpuModelKey} {
+		if _, ok := data.Values[key]; !ok {
+			t.Errorf("expected %s to be reported without any CPU hwmon chip, got keys %v", key, keysOfHardware(data.Values))
+		}
+	}
+	if _, ok := data.Values["cpu.temp"]; ok {
+		t.Errorf("unexpected cpu.temp without a CPU hwmon chip")
+	}
+}
+
+func keysOfHardware(m map[string]shared.HardwareValue) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestMilliCelsius(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		want   float64
+		wantOK bool
+	}{
+		{"positive", "45000", 45, true},
+		{"fractional", "48850", 48.85, true},
+		{"negative", "-5000", -5, true},
+		{"zero", "0", 0, true},
+		{"padded", " 43000\n", 43, true},
+		{"not a number", "N/A", 0, false},
+		{"empty", "", 0, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := milliCelsius(tc.in)
+			if ok != tc.wantOK {
+				t.Fatalf("milliCelsius(%q) ok = %v; want %v", tc.in, ok, tc.wantOK)
+			}
+			if ok && got != tc.want {
+				t.Errorf("milliCelsius(%q) = %v; want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTemperatureSensorIndex(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   int
+		wantOK bool
+	}{
+		{"temp1_input", 1, true},
+		{"temp10_input", 10, true},
+		{"temp_input", 0, false},
+		{"tempN_input", 0, false},
+		{"fan1_input", 0, false},
+		{"temp1_label", 0, false},
+	}
+
+	for _, tc := range cases {
+		got, ok := temperatureSensorIndex(tc.in)
+		if ok != tc.wantOK {
+			t.Fatalf("temperatureSensorIndex(%q) ok = %v; want %v", tc.in, ok, tc.wantOK)
+		}
+		if ok && got != tc.want {
+			t.Errorf("temperatureSensorIndex(%q) = %d; want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// helpers used to build fixture paths and names
+func itoa(i int) string { return strconv.Itoa(i) }
+
+func tempInputPath(chip, index int) string {
+	return "class/hwmon/hwmon" + itoa(chip) + "/temp" + itoa(index) + "_input"
+}
+
+func tempLabelPath(chip, index int) string {
+	return "class/hwmon/hwmon" + itoa(chip) + "/temp" + itoa(index) + "_label"
 }
 
 func TestParseCpuInfo(t *testing.T) {
@@ -280,138 +485,5 @@ func TestFirstFieldAfterColon(t *testing.T) {
 		if got := firstFieldAfterColon(tc.in); got != tc.want {
 			t.Errorf("firstFieldAfterColon(%q) = %q; want %q", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestLabelBeforeColon(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"Core 0:  +43.0°C", "Core 0"},
-		{"Package id 0: +45.0°C", "Package id 0"},
-		{"no colon here", ""},
-	}
-
-	for _, tc := range cases {
-		if got := labelBeforeColon(tc.in); got != tc.want {
-			t.Errorf("labelBeforeColon(%q) = %q; want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-func TestParseCelsius(t *testing.T) {
-	cases := []struct {
-		name   string
-		in     string
-		want   float64
-		wantOK bool
-	}{
-		{"padded plus", "  +48.0°C", 48, true},
-		{"with thresholds", "+48.0°C  (high = +84.0°C, crit = +100.0°C)", 48, true},
-		{"plain", "43.5°C", 43.5, true},
-		{"negative", "-5.0°C", -5, true},
-		{"integer", "+44°C", 44, true},
-		{"no number", "N/A", 0, false},
-		{"empty", "", 0, false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := parseCelsius(tc.in)
-			if ok != tc.wantOK {
-				t.Fatalf("parseCelsius(%q) ok = %v; want %v", tc.in, ok, tc.wantOK)
-			}
-			if ok && got != tc.want {
-				t.Errorf("parseCelsius(%q) = %v; want %v", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestSetTemperaturePrefersFloat documents that readings are stored as numbers
-// (so the UI formats them) and that unparsable text is preserved rather than
-// dropped.
-func TestSetTemperaturePrefersFloat(t *testing.T) {
-	temps := make(map[string]interface{})
-	setTemperature(temps, "cpu.temp", "  +51.0°C  (high = +84.0°C)")
-
-	value, ok := temps["cpu.temp"].(float64)
-	if !ok {
-		t.Fatalf("expected a float64, got %#v", temps["cpu.temp"])
-	}
-	if value != 51 {
-		t.Errorf("cpu.temp = %v; want 51", value)
-	}
-
-	setTemperature(temps, "cpu.pch", "N/A")
-	if got := temps["cpu.pch"]; got != "N/A" {
-		t.Errorf("cpu.pch = %#v; want the raw text preserved", got)
-	}
-
-	setTemperature(temps, "tccd0", "")
-	if _, exists := temps["tccd0"]; exists {
-		t.Errorf("expected an empty reading to add no entry")
-	}
-}
-
-// TestParseSensorOutputIntelPackageBindsCPUTemp is the regression test for the
-// missing CPU temperature: an Intel coretemp block must yield cpu.temp.
-func TestParseSensorOutputIntelPackageBindsCPUTemp(t *testing.T) {
-	lines := []string{
-		"coretemp-isa-0000",
-		"Adapter: ISA adapter",
-		"Package id 0:  +48.0°C  (high = +84.0°C, crit = +100.0°C)",
-		"Core 0:        +47.0°C  (high = +84.0°C, crit = +100.0°C)",
-	}
-
-	temps := parseSensorOutput(lines)
-
-	if _, ok := temps["cpu.temp"]; !ok {
-		t.Fatalf("expected cpu.temp to be set from the Package row, got keys %v", keysOf(temps))
-	}
-	if got := numeric(t, temps, "cpu.temp"); got != 48 {
-		t.Errorf("cpu.temp = %v; want 48", got)
-	}
-
-	// The package reading must not also be stored under a label-derived key.
-	if _, exists := temps["cpu.Package id 0"]; exists {
-		t.Errorf("package row leaked into a label-derived key")
-	}
-}
-
-// TestParseSensorOutputCoreTemperaturesAreNumbered verifies the per-core
-// sensors get sequential canonical keys regardless of the sensor label text.
-func TestParseSensorOutputCoreTemperaturesAreNumbered(t *testing.T) {
-	lines := []string{
-		"coretemp-isa-0000",
-		"Adapter: ISA adapter",
-		"Package id 0:  +48.0°C",
-		"Core 0:        +47.0°C",
-		"Core 1:        +49.0°C",
-		"Core 2:        +46.0°C",
-		"Core 3:        +45.0°C",
-	}
-
-	temps := parseSensorOutput(lines)
-
-	want := map[string]float64{
-		"cpu.coreTemp0": 47,
-		"cpu.coreTemp1": 49,
-		"cpu.coreTemp2": 46,
-		"cpu.coreTemp3": 45,
-	}
-	for key, expected := range want {
-		if got := numeric(t, temps, key); got != expected {
-			t.Errorf("%s = %v; want %v", key, got, expected)
-		}
-	}
-
-	// The package row must not be counted as a core.
-	if _, exists := temps["cpu.coreTemp4"]; exists {
-		t.Errorf("package row was counted as a core sensor")
-	}
-	if got := numeric(t, temps, "cpu.temp"); got != 48 {
-		t.Errorf("cpu.temp = %v; want 48", got)
 	}
 }

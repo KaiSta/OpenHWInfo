@@ -41,12 +41,20 @@ Per-core clocks render as a compact grid rather than one table row per core, so 
 * One clock per logical processor
 * The physical core each logical processor runs on, used to attribute per-core temperatures correctly on SMT systems
 
-lm-sensors `sensors`
+The processor's own hwmon chips (`/sys/class/hwmon/hwmon*`)
 
-* CPU temperature — `cpu.temp`, from Intel `Package id N` or AMD `Tctl`
-* PCH temp = chipset
-* Per-core temperatures — `cpu.coreTempN`
-* TCCD (per-CCD) temperatures where reported
+* CPU temperature — `cpu.temp`, from Intel `coretemp`'s `Package id N` or AMD
+  `k10temp`'s `Tctl`
+* PCH (chipset) temperature, from the PCH chip's first sensor
+* Per-core temperatures — `cpu.coreTempN`, from Intel `coretemp`'s `Core N` rows
+* TCCD (per-CCD) temperatures where reported — `tccdN`, from AMD `k10temp`
+
+Only the chips that belong to the processor are read, and the readings come
+straight from their `tempN_input`/`tempN_label` attributes. lm-sensors does not
+have to be installed, and nothing is forked on each poll. A driver that supplies
+no labels at all (older `k10temp`, ARM's `cpu_thermal`) is read as a single
+package reading, and a chip whose readings cannot be parsed produces no row
+rather than a zero.
 
 ## Mainboard infos
 

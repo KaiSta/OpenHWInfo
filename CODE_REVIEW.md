@@ -12,7 +12,8 @@ and the frontend calls the bound `App.GetData` method directly.
   the `Data` struct returned by `GetData`. Polls every 5 seconds via
   `window.go.main.App.GetData()`.
 - **Collectors:** one package per vendor.
-  - `cpuinfo` — `/proc/cpuinfo` plus lm-sensors `sensors` output.
+  - `cpuinfo` — `/proc/cpuinfo` plus the processor's own hwmon chips
+    (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`, PCH).
   - `nvidia` — `nvidia-smi --query-gpu=... --format=csv`.
   - `amd` — DRM sysfs (`/sys/class/drm/cardN/device/hwmon`) plus `lspci`.
   - `intel` — DRM sysfs (i915) plus `lspci`/`glxinfo`.
@@ -425,7 +426,7 @@ The following were fixed and are now covered by tests.
 
 | Package    | Coverage |
 |------------|----------|
-| `cpuinfo`  | `/proc/cpuinfo` parsing, `sensors` output (Intel coretemp incl. the `Package`→`cpu.temp` mapping, AMD k10temp, TCCD cap, malformed input), Celsius parsing |
+| `cpuinfo`  | `/proc/cpuinfo` parsing, hwmon temperature mapping (Intel coretemp incl. the `Package`→`cpu.temp` mapping and sensor-number ordering, AMD k10temp `Tctl`/`TccdN` with the CCD cap, PCH, label-less drivers, other components' chips ignored, millidegree conversion, unreadable sensors producing no row) |
 | `nvidia`   | CSV field parsing, unit stripping, `[N/A]` handling, multi-row output splitting, column-to-metric contract driven through the real parser, name-with-comma alignment, truncated rows |
 | `amd`      | sysfs-mocked single/multi-card collection, GPU name cleaning and disambiguation |
 | `intel`    | sysfs-mocked single/multi-card collection with an exact name assertion, PCI ID mapping (Arc incl. Battlemage, integrated GPUs must not be named Arc, non-GPU IDs resolve to nothing), table integrity rules, name cleaning, rejection of identifier-only input, and a fallback that always yields a usable name |
@@ -473,9 +474,9 @@ that produced two real bugs. The rendering itself was verified by previewing
   tooltip and the bar's width and colour are rewritten — so the verdict updates
   without a rebuild, and the bar transition survives it.
 
-`go test ./...` runs without a GPU or lm-sensors installed; hardware collectors
-are exercised by mocking `sysDir` (`amd`, `intel`) or by testing the pure parsing
-layer (`cpuinfo`, `nvidia`).
+`go test ./...` runs without a GPU installed; hardware collectors are exercised
+by mocking `sysDir` (`amd`, `intel`, `cpuinfo`) or by testing the pure parsing
+layer (`nvidia`, `/proc/cpuinfo`).
 
 ## Remaining opportunities
 
@@ -493,7 +494,7 @@ These are known limitations rather than defects, listed roughly by value.
    `cpu.model` with the full name anyway.
 
 3. **The device scan still runs on every poll.** `GetAllInformations()` probes
-   once per tick (one `nvidia-smi` call, one `sensors` call), which is correct
+   once per tick (one `nvidia-smi` call), which is correct
    but not free, and the device set is stable for the lifetime of the process —
    a device appearing later is the only case a cache would miss. Caching the
    probes with a short TTL (or checking for new cards on a slower cadence) would
