@@ -164,12 +164,21 @@ A sensor file that does not exist produces **no metric**, rather than a zero rea
 
 ## Memory infos
 
-`/proc/meminfo` (RAM and swap) and `/proc/pressure/memory` (the kernel's own pressure accounting) — one card for the machine
+`/proc/meminfo` (RAM and swap), `/proc/pressure/memory` (the kernel's own pressure accounting) and `/sys/block/zramN` (the compressed store swap usually lives on) — one card for the machine
 
 * **Memory Total**, **Used** and **Available**, in binary GiB — a machine sold as 16 GB reports exactly `16.00 GiB`. `Used` is `Total − Available`, the same figure `free` prints: `MemAvailable` is the kernel's estimate of what a new workload could claim without swapping, whereas `MemFree` ignores the reclaimable cache and would report a healthy machine as nearly full.
 * **Memory Usage** — the used share of total.
 * **Swap Total**, **Used** and **Usage** — only on a machine that has swap configured. A system with no swap reports no swap rows rather than three zeroes.
 * **Memory Pressure (some)** and **(full)** — the share of the last ten seconds during which tasks were stalled waiting for memory. `some` counts the windows in which at least one task stalled, `full` only those in which every task did, so `full` is the stronger signal that a machine is actually struggling. Both are absent on a kernel built without PSI.
+* **Zram Algorithm**, **Size**, **Usage**, **Memory** and **Ratio** — on a machine that swaps to a compressed RAM block device, and only when at least one device is configured. These rows describe the store itself rather than what is inside it: the swap rows above say how much the machine has swapped out, and these say what that costs.
+  * **Zram Size** is the device's uncompressed capacity in binary GiB — what it can hold before it is full. Note that this is the *uncompressed* figure, which is why it can be larger than the RAM the machine has.
+  * **Zram Usage** is the share of that capacity currently holding data.
+  * **Zram Memory** is what the stored data actually costs in RAM. It is larger than the data's compressed size, because the kernel's figure includes allocator fragmentation and per-page metadata, and it is quoted in MiB because an idle device costs a few hundred kilobytes — in GiB every idle machine would read `0.00`.
+  * **Zram Ratio** compares the data stored against its compressed size, written `4.00:1`. It appears only once there is data on both sides of it, and with almost nothing stored it is dominated by the few pages that are there — a freshly configured device reads tens to one — so **Zram Memory** is the figure to read on an idle machine.
+  * **Zram Algorithm** names the compressor in use, and only when every device uses the same one; naming one of several would be a claim about devices that do not use it. **Zram Devices** appears only when the kernel has more than one configured, because the other rows are then sums rather than one device's own figures.
+  * A device the module pre-created but nobody configured is skipped: it has no size, holds nothing and costs nothing. If any configured device's counters cannot be read, the counter rows are withheld rather than reported as a sum over the devices that did answer.
+
+`zswap` — the kernel's own compressed cache in front of a swap device — is a different mechanism and is not read. `zram` devices are also never reported as drives: they hold no filesystem identity of their own.
 
 `Used` and `Available` are derived from one reading, so they are only shown together: a machine whose availability cannot be read shows `Total` on its own, because a guess rendered as `0.00 GiB used` would be the app's claim rather than the kernel's. Kernels before 3.14 do not report `MemAvailable`; the figure is then derived the way those kernels' tooling derived it, from free memory plus the reclaimable caches.
 

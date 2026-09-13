@@ -43,6 +43,11 @@ const (
 	AmpereHour
 	// Volt is a battery's voltage.
 	Volt
+	// Ratio is a dimensionless figure expressed against one: how many bytes of
+	// data a compressed store holds per byte it occupies. It is a unit because
+	// the alternative is a bare number the label has to explain, which is the
+	// arrangement this codebase replaced everywhere else.
+	Ratio
 )
 
 // Suffix is the unit text shown beside a value, and the only place a unit
@@ -50,6 +55,10 @@ const (
 // row label is what stops a value and its label from disagreeing about what is
 // being measured -- the failure behind a lifetime-write count that was labelled
 // in terabytes while the number was something else entirely.
+//
+// A suffix that begins with punctuation is written against the number instead of
+// after a space (see withUnit in main.go), which is what lets a ratio read
+// "2.87:1" rather than "2.87 :1".
 //
 // Megabyte is binary despite the name: every collector that uses it either
 // divides by 1024*1024 (amd.parseMemoryValue) or receives MiB from its source
@@ -82,6 +91,8 @@ func (u HardwareUnit) Suffix() string {
 		return "Ah"
 	case Volt:
 		return "V"
+	case Ratio:
+		return ":1"
 	}
 	// UnknownUnit carries no text, and an unrecognised unit is not guessed at.
 	return ""

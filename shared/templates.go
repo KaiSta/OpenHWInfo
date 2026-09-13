@@ -78,6 +78,26 @@ var (
 	SwapUsed  = KeyTemplate{"Swap Used", "swap.used"}
 	SwapUsage = KeyTemplate{"Swap Usage", "swap.usage"}
 
+	// Zram is the compressed block device the kernel builds in RAM, which on a
+	// laptop is usually what swap lives on. These rows describe the compressed
+	// store itself, not what is inside it: how much data the machine has swapped
+	// out is already reported by the swap rows above, and the difference between
+	// the two is the point of zram — a machine can have gigabytes swapped and
+	// only a few hundred megabytes of RAM spent on it.
+	//
+	// Zram Memory is the RAM the compressed data actually occupies, which is not
+	// the same figure as the data's compressed size: the kernel's number includes
+	// allocator fragmentation and per-page metadata. Zram Ratio compares the data
+	// stored against its compressed size, and Zram Devices is listed only when the
+	// kernel has more than one device configured, since the other rows are then
+	// sums rather than one device's own figures.
+	ZramAlgorithm = KeyTemplate{"Zram Algorithm", "zram.algorithm"}
+	ZramDevices   = KeyTemplate{"Zram Devices", "zram.devices"}
+	ZramSize      = KeyTemplate{"Zram Size", "zram.size"}
+	ZramUsage     = KeyTemplate{"Zram Usage", "zram.usage"}
+	ZramMemory    = KeyTemplate{"Zram Memory", "zram.memory"}
+	ZramRatio     = KeyTemplate{"Zram Ratio", "zram.ratio"}
+
 	// Pressure is the kernel's own stall accounting: the share of the last 10
 	// seconds during which tasks were stalled waiting for memory. "some" counts
 	// any stalled task, "full" only windows in which every task was stalled, so

@@ -579,6 +579,12 @@ func TestMemTemplatesMatchCollectorKeyContract(t *testing.T) {
 		shared.SwapTotal.Key:       true,
 		shared.SwapUsed.Key:        true,
 		shared.SwapUsage.Key:       true,
+		shared.ZramAlgorithm.Key:   true,
+		shared.ZramDevices.Key:     true,
+		shared.ZramSize.Key:        true,
+		shared.ZramUsage.Key:       true,
+		shared.ZramMemory.Key:      true,
+		shared.ZramRatio.Key:       true,
 		shared.MemPressureSome.Key: true,
 		shared.MemPressureFull.Key: true,
 	}
@@ -590,13 +596,15 @@ func TestMemTemplatesMatchCollectorKeyContract(t *testing.T) {
 }
 
 // TestMemTemplatesOrder pins the reading order of the memory card: the RAM the
-// machine holds, how much of it is in use, what is left, then swap and finally
-// the kernel's pressure-stall averages.
+// machine holds, how much of it is in use, what is left, then swap, the
+// compressed store behind that swap where zram provides one, and finally the
+// kernel's pressure-stall averages.
 func TestMemTemplatesOrder(t *testing.T) {
 	got := keysOfTemplates(memTemplates)
 	want := []string{
 		"mem.total", "mem.used", "mem.available", "mem.usage",
 		"swap.total", "swap.used", "swap.usage",
+		"zram.algorithm", "zram.devices", "zram.size", "zram.usage", "zram.memory", "zram.ratio",
 		"mem.pressure.some", "mem.pressure.full",
 	}
 
@@ -706,6 +714,9 @@ func TestFormatValueAppendsTheUnit(t *testing.T) {
 		{"celsius", shared.NewHardwareValue(38.625, shared.Celsius, shared.Temperature), "38.62 °C"},
 		{"mebibytes", shared.NewHardwareValue(24564.0, shared.Megabyte, shared.Memory), "24564.00 MiB"},
 		{"hours", shared.NewHardwareValue(120.0, shared.Hour, shared.Usage), "120.00 h"},
+		// A ratio is dimensionless and written against the number: a space before
+		// the colon would read as two separate figures.
+		{"ratio", shared.NewHardwareValue(2.8765, shared.Ratio, shared.Unknown), "2.88:1"},
 		// A unit the app does not describe renders bare rather than guessed at.
 		{"unknown unit", shared.NewHardwareValue(120.0, shared.UnknownUnit, shared.Usage), "120.00"},
 		// Text values come from fallback paths that embed their own unit.

@@ -25,8 +25,9 @@ and the frontend calls the bound `App.GetData` method directly.
   - `storage` — `/sys/block` and `/sys/class/block` for drive identity, the
     drive's own hwmon chip (`nvme`, `drivetemp`) for temperature, and
     `/proc/mounts` plus `statfs` for how full its filesystems are.
-  - `memory` — `/proc/meminfo` for RAM and swap, plus `/proc/pressure/memory`
-    for the kernel's pressure-stall averages where the kernel provides them.
+  - `memory` — `/proc/meminfo` for RAM and swap, `/proc/pressure/memory` for
+    the kernel's pressure-stall averages where the kernel provides them, and
+    `/sys/block/zramN` for the compressed RAM block device swap usually lives on.
   - `battery` — `/sys/class/power_supply` for a laptop's batteries, their
     adapters and their wear. It reports one card per battery, because a laptop
     can carry more than one.
@@ -570,6 +571,79 @@ The following were fixed and are now covered by tests.
       the head shrink too would mean wrapping the status pill, which is worth
       doing only if a card ever gets a much shorter minimum.
 
+36. **A machine that swaps to zram showed nothing about it.** zram is a
+    compressed block device in RAM, and on a laptop it is usually where swap
+    lives, so the memory card reported that 9.76 GiB of swap existed without
+    saying that most of it was compressed memory and what that compression was
+    costing. The rows come from the device's own sysfs attributes — `disksize`,
+    `mm_stat` and `comp_algorithm` under `/sys/block/zramN` — so nothing is forked
+    and no root is needed, the same rule the rest of the collector follows.
+    - **The counters are positional, and are read that way.** `mm_stat` is a
+      sequence of whitespace-separated numbers, and the kernel documents the
+      order as `orig_data_size`, `compr_data_size`, `mem_used_total`, then
+      `mem_limit` and `mem_used_max`, then the page counters; only the first three
+      describe the data stored and what it costs. Every field must parse, because
+      a field that did not would leave the ones after it misaligned and the card
+      would print one counter's value under another counter's name.
+      Cross-checked against `zramctl` on the review host, which reports
+      `DATA 4K`, `COMPR 64B`, `TOTAL 20K` for a device whose `mm_stat` begins
+      `4096 64 20480`: the first three fields are those three figures, in that
+      order.
+    - **The rows describe the store, not its contents.** Swap usage is already on
+      the card; these say what the compressed store costs. `Zram Size` is the
+      device's *uncompressed* capacity (which is why it can exceed the machine's
+      RAM), `Zram Usage` is the share of it holding data, `Zram Memory` is
+      `mem_used_total` — the RAM the data really occupies, larger than its
+      compressed size because the kernel's figure includes allocator
+      fragmentation and per-page metadata — and `Zram Ratio` is the data stored
+      against what it compressed to.
+    - **`Zram Memory` is quoted in MiB, and that is a granularity decision.**
+      Twenty kilobytes is what the kernel allocates for a device holding nothing,
+      and two decimals of a GiB would render every idle machine's zram as
+      `0.00 GiB` — indistinguishable from "not read". The same figure in MiB reads
+      `0.02`, which is the kind of reading the rest of this app refuses to round
+      away. A machine actually under pressure spends hundreds of MiB on its
+      compressed store, which the same unit still reads plainly.
+    - **A ratio is a unit, and it is written against its number.**
+      `shared.Ratio` joins the unit list with the suffix `:1`, and `withUnit`
+      attaches a suffix that begins with punctuation rather than putting a space
+      before it, so the row reads `4.00:1` and not `4.00 :1`. A ratio is reported
+      only when both sides of the division are non-zero: an empty store has no
+      ratio, which is not the same reading as a ratio of zero.
+    - **The rows are sums, and the card says so.** A machine can spread swap over
+      several zram devices, so the figures are totals and a `Zram Devices` row
+      appears when there is more than one. The algorithm is named only when every
+      device uses the same one — naming one of several would be a claim about
+      devices that do not use it — and a `comp_algorithm` file that lists the
+      supported algorithms without marking the active one in square brackets
+      produces no algorithm row rather than a guess at the first name in it.
+    - **A device that cannot be summed is never dropped into a total.** A device
+      whose `disksize` cannot be read is skipped, because its capacity is unknown;
+      and if any configured device's counters are unreadable, `Zram Usage`,
+      `Zram Memory` and `Zram Ratio` are withheld entirely rather than reported as
+      a sum over the devices that answered. A figure quietly too low is worse
+      than no figure.
+    - **Unconfigured devices are skipped.** Loading the module with a device count
+      pre-creates several with no size; they hold nothing and cost nothing, and
+      reporting them would put a `0 GiB` device and a device count on a machine
+      that effectively has one.
+    - `zswap` — the kernel's compressed cache in front of a swap device — is a
+      different mechanism and is deliberately not read.
+    - Nine tests cover it: the common case, the units (including that the ratio's
+      suffix is written against the number), unconfigured devices, aggregation
+      over two devices with the count row, mixed algorithms, an unmarked
+      algorithm list, an empty store (no ratio, but a zero fill level that was
+      genuinely read), a missing/truncated/garbled `mm_stat`, and a machine
+      without zram. The existing fixtures now point the collector's block
+      directory at their temporary directory as well, so no test reads this
+      host's `/sys/block`.
+    - Verified on the review host, where swap is a 7.76 GiB zram device: the card
+      reads `Zram Algorithm lz4`, `Zram Size 7.76 GiB`, `Zram Usage 0.00 %`,
+      `Zram Memory 0.02 MiB`, `Zram Ratio 64.00:1`, which is `zramctl`'s
+      `lz4 / 7,8G / 4K / 64B / 20K` in the card's own units, and the frontend was
+      rendered against that payload plus a driven case (3.21 GiB swapped out,
+      `Zram Usage 41.34 %`, `Zram Memory 612.44 MiB`, `Zram Ratio 5.24:1`).
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
@@ -834,3 +908,20 @@ These are known limitations rather than defects, listed roughly by value.
    state, so a laptop left on battery is only noticed by looking at the window —
    the same gap the drive verdict has, and the same fix (a Go-side poll that
    keeps running while the window is hidden) would close both.
+
+25. **The zram rows are sums over the machine's devices, not per device.** That is
+   the figure the machine pays for, but two devices with different algorithms or
+   ages cannot be told apart on the card, which is why the algorithm is withheld
+   when they disagree rather than shown as a set. A card per device (the shape
+   drives and batteries already use) would report each compressor's own ratio,
+   and would need a name for the card — the devices carry no label beyond their
+   number. The `huge_pages` counter (pages no algorithm could compress, and so
+   stored whole) and the writeback counters in `bd_stat` are also unread; the
+   first is arguably worth a row on a machine whose ratio looks poor.
+
+26. **`Zram Ratio` has no min/max columns** because a dimensionless ratio is not
+   any of the value types the history tracks (temperature, frequency, usage,
+   power, memory), and a ratio tracked as one of those would be labelled as
+   something it is not. The columns are blank for it the way they are for a
+   drive's model name, which is consistent but means the card cannot show how the
+   ratio has moved since the app started.

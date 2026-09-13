@@ -229,6 +229,12 @@ var memTemplates = []shared.KeyTemplate{
 	shared.SwapTotal,
 	shared.SwapUsed,
 	shared.SwapUsage,
+	shared.ZramAlgorithm,
+	shared.ZramDevices,
+	shared.ZramSize,
+	shared.ZramUsage,
+	shared.ZramMemory,
+	shared.ZramRatio,
 	shared.MemPressureSome,
 	shared.MemPressureFull,
 }
@@ -532,6 +538,11 @@ func withUnit(text string, unit shared.HardwareUnit) string {
 	suffix := unit.Suffix()
 	if text == "" || suffix == "" {
 		return text
+	}
+	// A suffix that begins with punctuation is written against the number rather
+	// than after a space, so a ratio reads "2.87:1" and not "2.87 :1".
+	if strings.HasPrefix(suffix, ":") {
+		return text + suffix
 	}
 	return text + " " + suffix
 }

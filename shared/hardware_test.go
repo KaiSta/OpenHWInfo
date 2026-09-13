@@ -7,15 +7,20 @@ import "testing"
 // only statement of their unit was the label beside them.
 func TestUnitSuffixNamesEveryUnit(t *testing.T) {
 	want := map[HardwareUnit]string{
-		Celsius:  "°C",
-		MHz:      "MHz",
-		Percent:  "%",
-		Watt:     "W",
-		Megabyte: "MiB",
-		Gigabyte: "GB",
-		Terabyte: "TB",
-		RPM:      "RPM",
-		Hour:     "h",
+		Celsius:    "°C",
+		MHz:        "MHz",
+		Percent:    "%",
+		Watt:       "W",
+		Megabyte:   "MiB",
+		Gigabyte:   "GB",
+		Terabyte:   "TB",
+		RPM:        "RPM",
+		Hour:       "h",
+		Gibibyte:   "GiB",
+		WattHour:   "Wh",
+		AmpereHour: "Ah",
+		Volt:       "V",
+		Ratio:      ":1",
 	}
 
 	for unit, suffix := range want {
@@ -43,6 +48,7 @@ func TestUnitSuffixNamesEveryUnit(t *testing.T) {
 func TestUnitValuesStayAppendOnly(t *testing.T) {
 	ordered := []HardwareUnit{
 		UnknownUnit, Celsius, MHz, Percent, Watt, Megabyte, RPM, Gigabyte, Terabyte, Hour,
+		Gibibyte, WattHour, AmpereHour, Volt, Ratio,
 	}
 	for i, unit := range ordered {
 		if int(unit) != i {

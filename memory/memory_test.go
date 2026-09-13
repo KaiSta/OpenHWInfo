@@ -4,23 +4,32 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
-// writeFixture points the collector at a temporary /proc/meminfo and, when psi
-// is non-empty, a temporary pressure file. Leaving psi empty models a kernel
-// without PSI, where the file does not exist at all.
-func writeFixture(t *testing.T, meminfo, psi string) {
+// writeFixture points the collector at a temporary /proc/meminfo, a temporary
+// pressure file and a temporary block directory. Leaving psi empty models a
+// kernel without PSI, where the file does not exist at all; the block directory
+// starts empty, which is a machine without zram, and zram tests add devices to
+// it with writeZramDevice. It returns the fixture directory.
+func writeFixture(t *testing.T, meminfo, psi string) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	originalMeminfo, originalPSI := meminfoPath, psiPath
+	blockDir := filepath.Join(dir, "block")
+	if err := os.MkdirAll(blockDir, 0o755); err != nil {
+		t.Fatalf("failed to create %s: %v", blockDir, err)
+	}
+
+	originalMeminfo, originalPSI, originalZram := meminfoPath, psiPath, zramPath
 	meminfoPath = filepath.Join(dir, "meminfo")
 	psiPath = filepath.Join(dir, "pressure")
+	zramPath = blockDir
 	t.Cleanup(func() {
-		meminfoPath, psiPath = originalMeminfo, originalPSI
+		meminfoPath, psiPath, zramPath = originalMeminfo, originalPSI, originalZram
 	})
 
 	if err := os.WriteFile(meminfoPath, []byte(meminfo), 0o644); err != nil {
@@ -31,19 +40,46 @@ func writeFixture(t *testing.T, meminfo, psi string) {
 			t.Fatalf("failed to write %s: %v", psiPath, err)
 		}
 	}
+	return dir
+}
+
+// writeZramDevice writes one device's sysfs attributes into the fixture's block
+// directory, the way the kernel exposes them under /sys/block/zramN. An empty
+// argument leaves that file out, which is how the tests model a device whose
+// mm_stat (or algorithm) cannot be read.
+func writeZramDevice(t *testing.T, dir, name, disksize, mmStat, algorithm string) {
+	t.Helper()
+
+	deviceDir := filepath.Join(dir, "block", name)
+	if err := os.MkdirAll(deviceDir, 0o755); err != nil {
+		t.Fatalf("failed to create %s: %v", deviceDir, err)
+	}
+	for file, content := range map[string]string{
+		"disksize":       disksize,
+		"mm_stat":        mmStat,
+		"comp_algorithm": algorithm,
+	} {
+		if content == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(deviceDir, file), []byte(content), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", filepath.Join(deviceDir, file), err)
+		}
+	}
 }
 
 // writeMissingFixture points the collector at paths that do not exist, so
-// neither file can be read.
+// nothing can be read.
 func writeMissingFixture(t *testing.T) {
 	t.Helper()
 
 	dir := t.TempDir()
-	originalMeminfo, originalPSI := meminfoPath, psiPath
+	originalMeminfo, originalPSI, originalZram := meminfoPath, psiPath, zramPath
 	meminfoPath = filepath.Join(dir, "absent-meminfo")
 	psiPath = filepath.Join(dir, "absent-pressure")
+	zramPath = filepath.Join(dir, "absent-block")
 	t.Cleanup(func() {
-		meminfoPath, psiPath = originalMeminfo, originalPSI
+		meminfoPath, psiPath, zramPath = originalMeminfo, originalPSI, originalZram
 	})
 }
 
@@ -386,6 +422,224 @@ full avg10=
 	for _, key := range want {
 		if _, exists := data.Values[key]; !exists {
 			t.Errorf("expected %s to be reported, got rows %v", key, keysOf(data))
+		}
+	}
+}
+
+// zram fixture values. One device with 8 GiB of uncompressed capacity holding
+// 2 GiB of data, compressed to 512 MiB and costing 640 MiB of RAM: a 4:1 ratio,
+// a quarter of the device in use, and a RAM figure that is deliberately larger
+// than the compressed size because the kernel's mem_used_total includes the
+// allocator's own overhead.
+const (
+	zram8GiB     = "8589934592"
+	zramDense    = "2147483648 536870912 671088640 0 671088640 0 0 0 0\n"
+	zramAlgoList = "lzo-rle lzo [lz4] lz4hc zstd deflate\n"
+)
+
+// TestZramReportsTheCompressedStore covers the common machine: zram is present,
+// configured and holding data. The rows describe the store itself — how big it
+// is, how much of it is in use, what it costs in RAM and how well it compressed.
+func TestZramReportsTheCompressedStore(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	writeZramDevice(t, dir, "zram0", zram8GiB, zramDense, zramAlgoList)
+
+	data := GetInformations()
+
+	checks := map[string]float64{
+		"zram.size":   8,   // disksize, the uncompressed capacity
+		"zram.usage":  25,  // 2 of 8 GiB
+		"zram.memory": 640, // mem_used_total, in MiB
+		"zram.ratio":  4,   // 2 GiB stored in 512 MiB
+	}
+	for key, want := range checks {
+		if got := number(t, data, key); math.Abs(got-want) > 0.001 {
+			t.Errorf("%s = %v; want %v", key, got, want)
+		}
+	}
+
+	if got, want := row(t, data, "zram.algorithm").Value, "lz4"; got != want {
+		t.Errorf("zram.algorithm = %v; want %q (the bracketed one)", got, want)
+	}
+	// One device is the common case, and every other row is then that device's
+	// own figures rather than a sum, so a count row would say nothing.
+	if _, exists := data.Values["zram.devices"]; exists {
+		t.Error("a single device should not produce a device count")
+	}
+}
+
+// TestZramUnitsMatchTheRows pins the units: the device size in GiB, the fill
+// level and the ratio as they are, and the RAM cost in MiB. A RAM figure in GiB
+// would round an idle device's few hundred kilobytes down to 0.00 on every
+// machine that is not under memory pressure.
+func TestZramUnitsMatchTheRows(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	writeZramDevice(t, dir, "zram0", zram8GiB, zramDense, zramAlgoList)
+
+	data := GetInformations()
+
+	want := map[string]shared.HardwareUnit{
+		"zram.size":   shared.Gibibyte,
+		"zram.usage":  shared.Percent,
+		"zram.memory": shared.Megabyte,
+		"zram.ratio":  shared.Ratio,
+	}
+	for key, unit := range want {
+		if got := row(t, data, key).Unit; got != unit {
+			t.Errorf("%s unit = %v; want %v", key, got, unit)
+		}
+	}
+
+	// The ratio is the one row whose suffix is written against the number: a
+	// ratio is a dimensionless figure, and "4.00 :1" would read as two tokens.
+	if got, want := data.Values["zram.ratio"].Unit.Suffix(), ":1"; got != want {
+		t.Errorf("zram.ratio suffix = %q; want %q", got, want)
+	}
+}
+
+// TestZramUnconfiguredDevicesAreSkipped covers the module loaded with a device
+// count: the extra devices exist as directories with no size, hold nothing and
+// cost nothing, so they must not turn into a 0 GiB row or a device count on a
+// machine that effectively has one device.
+func TestZramUnconfiguredDevicesAreSkipped(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	writeZramDevice(t, dir, "zram0", zram8GiB, zramDense, zramAlgoList)
+	writeZramDevice(t, dir, "zram1", "0", "0 0 0 0 0 0 0 0 0\n", zramAlgoList)
+	writeZramDevice(t, dir, "zram2", "", "", "")
+
+	data := GetInformations()
+
+	if got := number(t, data, "zram.size"); math.Abs(got-8) > 0.001 {
+		t.Errorf("zram.size = %v; want 8 (the configured device only)", got)
+	}
+	if _, exists := data.Values["zram.devices"]; exists {
+		t.Error("unconfigured devices should not be counted")
+	}
+}
+
+// TestZramAggregatesEveryConfiguredDevice covers machines that spread swap over
+// several devices: the figures are the machine's totals, and the count row says
+// so, because otherwise the rows would look like one device's own numbers.
+func TestZramAggregatesEveryConfiguredDevice(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	// Two 4 GiB devices, each holding 1 GiB compressed to 256 MiB at a cost of
+	// 320 MiB: the totals are 8 GiB capacity, 2 GiB stored, 640 MiB of RAM.
+	writeZramDevice(t, dir, "zram0", "4294967296", "1073741824 268435456 335544320 0 0 0 0 0 0\n", zramAlgoList)
+	writeZramDevice(t, dir, "zram1", "4294967296", "1073741824 268435456 335544320 0 0 0 0 0 0\n", zramAlgoList)
+
+	data := GetInformations()
+
+	checks := map[string]float64{
+		"zram.size":   8,
+		"zram.usage":  25,
+		"zram.memory": 640,
+		"zram.ratio":  4,
+	}
+	for key, want := range checks {
+		if got := number(t, data, key); math.Abs(got-want) > 0.001 {
+			t.Errorf("%s = %v; want %v (summed over both devices)", key, got, want)
+		}
+	}
+	if got, want := row(t, data, "zram.devices").Value, "2"; got != want {
+		t.Errorf("zram.devices = %v; want %q", got, want)
+	}
+}
+
+// TestZramNamesAnAlgorithmOnlyWhenTheDevicesShareOne: naming one of several
+// algorithms would be a claim about devices that do not use it.
+func TestZramNamesAnAlgorithmOnlyWhenTheDevicesShareOne(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	writeZramDevice(t, dir, "zram0", zram8GiB, zramDense, zramAlgoList)
+	writeZramDevice(t, dir, "zram1", zram8GiB, zramDense, "lzo-rle [zstd]\n")
+
+	data := GetInformations()
+
+	if _, exists := data.Values["zram.algorithm"]; exists {
+		t.Errorf("unexpected zram.algorithm with mixed algorithms: %v", data.Values["zram.algorithm"])
+	}
+	// The rest of the card is unaffected.
+	if got := number(t, data, "zram.size"); math.Abs(got-16) > 0.001 {
+		t.Errorf("zram.size = %v; want 16", got)
+	}
+}
+
+// TestZramAlgorithmWithoutBracketsIsNotGuessed covers a comp_algorithm file
+// that lists the supported algorithms without marking the active one. There is
+// no way to tell which is in use, so the row is omitted rather than filled with
+// the first name in the file.
+func TestZramAlgorithmWithoutBracketsIsNotGuessed(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	writeZramDevice(t, dir, "zram0", zram8GiB, zramDense, "lzo lz4 zstd\n")
+
+	data := GetInformations()
+
+	if _, exists := data.Values["zram.algorithm"]; exists {
+		t.Error("an unmarked algorithm list should not be guessed at")
+	}
+}
+
+// TestZramEmptyStoreHasNoRatio: a configured device holding nothing has no
+// ratio, which is not the same reading as a ratio of zero. Its size and its
+// zero fill level are still reported, because those were read.
+func TestZramEmptyStoreHasNoRatio(t *testing.T) {
+	dir := writeFixture(t, sixteenGiB, pressureBoth)
+	writeZramDevice(t, dir, "zram0", zram8GiB, "0 0 20480 0 20480 0 0 0 0\n", zramAlgoList)
+
+	data := GetInformations()
+
+	if _, exists := data.Values["zram.ratio"]; exists {
+		t.Error("unexpected ratio for a store holding no data")
+	}
+	if got := number(t, data, "zram.usage"); got != 0 {
+		t.Errorf("zram.usage = %v; want 0 (the device is configured and empty)", got)
+	}
+	// 20480 bytes is what the kernel allocates for a device holding nothing,
+	// which is why the row is quoted in MiB: two decimals of a GiB would show
+	// 0.00 and make an idle zram look like it costs nothing at all.
+	if got := number(t, data, "zram.memory"); math.Abs(got-20480.0/(1024*1024)) > 1e-9 {
+		t.Errorf("zram.memory = %v MiB; want %v", got, 20480.0/(1024*1024))
+	}
+}
+
+// TestZramWithoutUsableCountersOmitsTheAggregates: a device whose mm_stat is
+// missing, truncated or garbled still has a size, but its counters are unknown.
+// Summing the devices that did answer would understate the machine's use, so
+// the counters are withheld entirely rather than reported too low.
+func TestZramWithoutUsableCountersOmitsTheAggregates(t *testing.T) {
+	cases := map[string]string{
+		"missing":   "",
+		"truncated": "2147483648 536870912\n",
+		"garbled":   "2147483648 not-a-number 671088640 0 0\n",
+	}
+	for name, mmStat := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := writeFixture(t, sixteenGiB, pressureBoth)
+			writeZramDevice(t, dir, "zram0", zram8GiB, mmStat, zramAlgoList)
+
+			data := GetInformations()
+
+			for _, key := range []string{"zram.usage", "zram.memory", "zram.ratio"} {
+				if _, exists := data.Values[key]; exists {
+					t.Errorf("%s = %v; want no row for a device whose counters are unknown", key, data.Values[key].Value)
+				}
+			}
+			if got := number(t, data, "zram.size"); math.Abs(got-8) > 0.001 {
+				t.Errorf("zram.size = %v; want 8 (the size was readable)", got)
+			}
+		})
+	}
+}
+
+// TestZramAbsentOnAMachineWithoutIt: no zram devices means no zram rows, which
+// is the state of every machine that does not use it.
+func TestZramAbsentOnAMachineWithoutIt(t *testing.T) {
+	writeFixture(t, sixteenGiB, pressureBoth)
+
+	data := GetInformations()
+
+	for key := range data.Values {
+		if strings.HasPrefix(key, "zram.") {
+			t.Errorf("unexpected %s on a machine without zram", key)
 		}
 	}
 }

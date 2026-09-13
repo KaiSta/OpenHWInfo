@@ -3,35 +3,49 @@
 // The readings come from /proc/meminfo, which every Linux system provides, so
 // there is nothing to configure and no external program to install. Memory
 // pressure, where the kernel supports it, is read from the PSI file the kernel
-// maintains for its own stall accounting.
+// maintains for its own stall accounting. The kernel's compressed RAM block
+// devices (zram), which is what swap usually lives on, are read from their own
+// sysfs attributes — still no external program, still no root.
 package memory
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
-// meminfoPath and psiPath are variables so tests can point the collector at a
-// fixture, exactly as the other collectors do with their own paths.
+// meminfoPath, psiPath and zramPath are variables so tests can point the
+// collector at a fixture, exactly as the other collectors do with their own
+// paths. zramPath is the sysfs block directory, which holds one zramN entry per
+// device.
 var (
 	meminfoPath = "/proc/meminfo"
 	psiPath     = "/proc/pressure/memory"
+	zramPath    = "/sys/block"
 )
 
-// bytesPerGiB is the divisor that turns a byte count into GiB.
-const bytesPerGiB = 1024 * 1024 * 1024
+const (
+	// bytesPerGiB is the divisor that turns a byte count into GiB.
+	bytesPerGiB = 1024 * 1024 * 1024
+	// bytesPerMiB is the divisor for the zram memory row. That figure is quoted
+	// in MiB because a machine swapping hard spends hundreds of MiB on its
+	// compressed store, while the same figure in GiB would round an idle
+	// device's few hundred kilobytes down to nothing.
+	bytesPerMiB = 1024 * 1024
+)
 
 // GetInformations reports the machine's memory as one card: the RAM it holds,
 // how much of that is in use, what is still available, and — when the machine
 // has swap and a kernel that accounts for stalls — swap usage and memory
-// pressure.
+// pressure, with the compressed store behind that swap where zram provides it.
 //
 // Only fields that could actually be read produce a row. A machine with no swap
-// configured reports no swap rows, and a kernel without PSI reports no pressure
-// rows, rather than three zeroes each.
+// configured reports no swap rows, a kernel without PSI reports no pressure
+// rows, and a machine without zram reports no zram rows, rather than zeroes for
+// each.
 func GetInformations() shared.HardwareData {
 	data := shared.HardwareData{Name: "Memory", Values: make(map[string]shared.HardwareValue)}
 
@@ -78,6 +92,8 @@ func GetInformations() shared.HardwareData {
 			addPercent(&data, shared.SwapUsage.Key, swapUsed, swapTotal)
 		}
 	}
+
+	addZram(&data)
 
 	addPressure(&data)
 
@@ -197,4 +213,188 @@ func psiValue(fields []string, name string) (float64, bool) {
 		return parsed, true
 	}
 	return 0, false
+}
+
+// zramDevice is what one zram device reports about itself. hasCounters is false
+// when the device's mm_stat could not be read or did not carry the counters, so
+// its figures are unknown rather than zero.
+type zramDevice struct {
+	size        float64 // disksize: the uncompressed capacity of the device
+	hasCounters bool
+	orig        float64 // orig_data_size: the uncompressed data stored in it
+	compressed  float64 // compr_data_size: what that data was compressed to
+	memory      float64 // mem_used_total: the RAM the store occupies
+	algorithm   string  // the algorithm in use, "" when the file names none
+}
+
+// addZram reports the kernel's compressed RAM block devices, read from sysfs so
+// that nothing is forked and no tool has to be installed. What it describes is
+// the store itself — how large it is, how much of it holds data, what that data
+// costs in RAM and how well it compressed — not what is inside it, which the
+// swap rows above already state.
+func addZram(data *shared.HardwareData) {
+	devices := readZram()
+	if len(devices) == 0 {
+		return
+	}
+
+	var size, orig, compressed, memory float64
+	counters := true
+	algorithms := make(map[string]bool)
+	for _, device := range devices {
+		size += device.size
+		if device.algorithm != "" {
+			algorithms[device.algorithm] = true
+		}
+		if !device.hasCounters {
+			counters = false
+			continue
+		}
+		orig += device.orig
+		compressed += device.compressed
+		memory += device.memory
+	}
+
+	data.Values[shared.ZramSize.Key] = shared.NewHardwareValue(size/bytesPerGiB, shared.Gibibyte, shared.Memory)
+
+	if !counters {
+		// The counters are reported only when every device answered: a sum over
+		// the devices that did would understate what the machine is spending,
+		// and a reading that is quietly too low is worse than none.
+		shared.Debugf("zram: a device reported no usable mm_stat; omitting the aggregate counters")
+	} else {
+		if size > 0 {
+			data.Values[shared.ZramUsage.Key] = shared.NewHardwareValue(orig/size*100, shared.Percent, shared.Usage)
+		}
+		data.Values[shared.ZramMemory.Key] = shared.NewHardwareValue(memory/bytesPerMiB, shared.Megabyte, shared.Memory)
+		// A ratio has data on both sides of it or it does not exist at all: an
+		// empty store has no ratio, which is not a ratio of zero.
+		if orig > 0 && compressed > 0 {
+			data.Values[shared.ZramRatio.Key] = shared.NewHardwareValue(orig/compressed, shared.Ratio, shared.Unknown)
+		}
+	}
+
+	// One algorithm can be named for the set only when the devices share one;
+	// naming one of several would be a claim about devices that do not use it.
+	if len(algorithms) == 1 {
+		for algorithm := range algorithms {
+			data.Values[shared.ZramAlgorithm.Key] = shared.NewHardwareValue(algorithm, shared.UnknownUnit, shared.Unknown)
+		}
+	} else if len(algorithms) > 1 {
+		shared.Debugf("zram: devices use %d different algorithms; naming none of them", len(algorithms))
+	}
+
+	// The device count is worth a row because it makes the other rows readable as
+	// sums, but only when there is more than one device to sum.
+	if len(devices) > 1 {
+		data.Values[shared.ZramDevices.Key] = shared.NewHardwareValue(strconv.Itoa(len(devices)), shared.UnknownUnit, shared.Unknown)
+	}
+}
+
+// readZram lists the zram devices the kernel currently has. A device the module
+// pre-created but nobody configured is not one of them: it has no size, holds
+// nothing and costs nothing, and reporting it would put a 0 GiB device on the
+// card of every machine that loads the module with a device count.
+func readZram() []zramDevice {
+	entries, err := os.ReadDir(zramPath)
+	if err != nil {
+		shared.Debugf("Could not list %s: %v", zramPath, err)
+		return nil
+	}
+
+	var devices []zramDevice
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "zram") || !allDigits(strings.TrimPrefix(name, "zram")) {
+			continue
+		}
+		device, ok := readZramDevice(filepath.Join(zramPath, name))
+		if !ok {
+			continue
+		}
+		devices = append(devices, device)
+	}
+	return devices
+}
+
+// readZramDevice reads one device's attributes. It reports false when the device
+// has no size — which is how an unconfigured one looks — and when the size
+// cannot be read, because a device whose capacity is unknown cannot be summed
+// into the card's total.
+func readZramDevice(dir string) (zramDevice, bool) {
+	sizes, ok := readNumbers(filepath.Join(dir, "disksize"))
+	if !ok || len(sizes) == 0 || sizes[0] <= 0 {
+		return zramDevice{}, false
+	}
+
+	device := zramDevice{size: sizes[0]}
+	device.algorithm = readZramAlgorithm(filepath.Join(dir, "comp_algorithm"))
+
+	// mm_stat is one line of whitespace-separated counters in the order the
+	// kernel documents: orig_data_size, compr_data_size and mem_used_total, then
+	// mem_limit and mem_used_max, then the page counters. Only the first three
+	// say what is stored and what it costs.
+	counters, ok := readNumbers(filepath.Join(dir, "mm_stat"))
+	if !ok || len(counters) < 3 {
+		shared.Debugf("zram: %s reported no usable mm_stat", dir)
+		return device, true
+	}
+	device.orig, device.compressed, device.memory = counters[0], counters[1], counters[2]
+	device.hasCounters = true
+	return device, true
+}
+
+// readZramAlgorithm returns the algorithm a device is using. comp_algorithm
+// lists every algorithm the kernel supports with the one in use in square
+// brackets ("lzo-rle lzo [lz4] zstd"), so a file without brackets says nothing
+// about which is active and is reported as saying nothing.
+func readZramAlgorithm(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		shared.Debugf("Could not read %s: %v", path, err)
+		return ""
+	}
+	for _, field := range strings.Fields(string(raw)) {
+		if strings.HasPrefix(field, "[") && strings.HasSuffix(field, "]") {
+			return strings.Trim(field, "[]")
+		}
+	}
+	return ""
+}
+
+// readNumbers reads whitespace-separated numbers from a sysfs file. Every field
+// must parse: these files are positional — mm_stat is a sequence of counters — so
+// a field that did not parse would leave the ones after it misaligned, and a
+// misaligned counter is another counter's reading.
+func readNumbers(path string) ([]float64, bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		shared.Debugf("Could not read %s: %v", path, err)
+		return nil, false
+	}
+
+	var numbers []float64
+	for _, field := range strings.Fields(string(raw)) {
+		number, err := strconv.ParseFloat(field, 64)
+		if err != nil {
+			shared.Debugf("%s: %q is not a number", path, field)
+			return nil, false
+		}
+		numbers = append(numbers, number)
+	}
+	return numbers, true
+}
+
+// allDigits reports whether s is one or more digits, which is what tells a zram
+// device's name from anything else the block directory holds.
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
