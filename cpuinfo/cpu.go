@@ -20,11 +20,11 @@ var (
 	cpuBrandKey    = shared.CPUBrand.Key
 	cpuModelKey    = shared.CPUModel.Key
 
-	sensorsProbeMu    sync.Mutex
-	sensorsProbeOK    bool
-	sensorsProbeDone  bool
-	sensorsProbeTime  time.Time
-	sensorsProbeTTL   = 60 * time.Second
+	sensorsProbeMu   sync.Mutex
+	sensorsProbeOK   bool
+	sensorsProbeDone bool
+	sensorsProbeTime time.Time
+	sensorsProbeTTL  = 60 * time.Second
 )
 
 func hasSensors() bool {
