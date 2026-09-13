@@ -38,6 +38,20 @@ function gauge(key, valStr, values) {
     if (/temp|tccd|pch/i.test(key)) return frac(val, temperatureLimit(key));
     if (/usage|percent/i.test(key)) return frac(val, 100);
 
+    // A drive's consumed endurance behaves like a usage figure: more is worse.
+    if (/life/i.test(key)) return frac(val, 100);
+
+    // Spare capacity is the one reading that is better the higher it is, so it
+    // needs its own scale: a drive whose spare pool is nearly gone is the drive
+    // about to fail, and a full pool is not a drive at 100% load.
+    if (/spare/i.test(key)) {
+        var spare = Math.max(0, Math.min(1, val / 100));
+        return {
+            pct: Math.round(spare * 100),
+            cls: spare < 0.15 ? "bad" : (spare < 0.3 ? "warn" : "good")
+        };
+    }
+
     if (/power/i.test(key)) {
         var max = num(values["gpu.power.max"]) || val;
         if (max > 0 && key.indexOf("avg") !== -1) return frac(val, max);
@@ -106,12 +120,56 @@ function cardHead(iconSrc, title, subtitle) {
     var img = makeEl("img");
     img.src = iconSrc;
     img.alt = title + " Icon";
-    var text = makeEl("div");
+    var text = makeEl("div", "card-text");
     text.appendChild(makeEl("div", "card-title", title));
     text.appendChild(makeEl("div", "card-sub", subtitle));
     head.appendChild(img);
     head.appendChild(text);
+    // The health pill is always present so a verdict can appear, change or be
+    // dropped without rebuilding the card — a rebuild would restart the bar
+    // animations, and a drive's health is exactly the thing that changes.
+    head.appendChild(statusPill(null));
     return head;
+}
+
+// A device's health verdict as the collector reported it: a level the palette
+// already styles (good, warn, bad, unknown), a short text and the reason. The
+// reason is the tooltip, because a warning a user cannot account for is worse
+// than no warning at all.
+function statusPill(status) {
+    var pill = makeEl("span", "status-pill");
+    setStatusPill(pill, status);
+    return pill;
+}
+
+function setStatusPill(pill, status) {
+    var level = status && status.Level;
+    if (!level) {
+        pill.hidden = true;
+        pill.className = "status-pill";
+        pill.textContent = "";
+        pill.removeAttribute("title");
+        return;
+    }
+    pill.hidden = false;
+    pill.className = "status-pill " + level;
+    pill.textContent = status.Text || "";
+    if (status.Detail) {
+        pill.title = status.Detail;
+    } else {
+        pill.removeAttribute("title");
+    }
+}
+
+function updateStatus(card, status) {
+    var head = card.querySelector(".card-head");
+    if (!head) return;
+    var pill = head.querySelector(".status-pill");
+    if (!pill) {
+        head.appendChild(statusPill(status));
+        return;
+    }
+    setStatusPill(pill, status);
 }
 
 // The card shell never changes between ticks: rows are reconciled into
@@ -645,6 +703,10 @@ function render(data) {
         var title = disk.Name;
         var medium = values["disk.medium"] || "Storage";
         var subtitle = medium + " · " + keys.length + " metrics";
+        // The verdict is deliberately not part of the signature: it is written
+        // onto the pill in place, so a drive going from Good to Warning updates
+        // its badge without the whole card being rebuilt.
+        var status = disk.Status || null;
         specs.push({
             key: "disk" + index,
             signature: [title, subtitle, keys.map(keyOf).join(",")].join("|"),
@@ -652,11 +714,13 @@ function render(data) {
                 var card = buildCardShell("/resources/disk.png", title, subtitle);
                 updateMetrics(card.querySelector("tbody"), keys, labels,
                     values, minValues, maxValues);
+                updateStatus(card, status);
                 return card;
             },
             update: function (card) {
                 updateMetrics(card.querySelector("tbody"), keys, labels,
                     values, minValues, maxValues);
+                updateStatus(card, status);
             }
         });
     });

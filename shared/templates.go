@@ -47,6 +47,19 @@ var (
 	DiskFSTotal  = KeyTemplate{"Filesystem Total", "disk.fs.total"}
 	DiskFSUsed   = KeyTemplate{"Filesystem Used", "disk.fs.used"}
 	DiskFSFree   = KeyTemplate{"Filesystem Free", "disk.fs.free"}
+
+	// SMART rows. Values on a drive card are bare numbers whose unit the label
+	// carries, so the units live in the labels here rather than in the values.
+	// Each row is produced only by a drive that reports it, so an HDD shows no
+	// wear row and a SATA drive shows no spare-capacity row.
+	DiskSmartLife       = KeyTemplate{"Life Used (%)", "disk.smart.life"}
+	DiskSmartWritten    = KeyTemplate{"Data Written (TB)", "disk.smart.written"}
+	DiskSmartPowerOn    = KeyTemplate{"Power-On Time (h)", "disk.smart.hours"}
+	DiskSmartBadSectors = KeyTemplate{"Bad Sectors", "disk.smart.badSectors"}
+	DiskSmartSpare      = KeyTemplate{"Spare Capacity (%)", "disk.smart.spare"}
+	DiskSmartMediaErr   = KeyTemplate{"Media Errors", "disk.smart.mediaErrors"}
+	DiskSmartSelftest   = KeyTemplate{"SMART Self-Test", "disk.smart.selftest"}
+	DiskSmartWarnings   = KeyTemplate{"SMART Warnings", "disk.smart.warnings"}
 )
 
 // GPU template variables

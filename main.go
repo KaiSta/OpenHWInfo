@@ -43,6 +43,9 @@ type DeviceView struct {
 	Values    map[string]string
 	MinValues map[string]string
 	MaxValues map[string]string
+	// Status is the device's own health verdict, shown as a badge on the card;
+	// nil for devices that do not report one.
+	Status *shared.DeviceStatus
 }
 
 type Data struct {
@@ -170,6 +173,12 @@ var gpuTemplates = []shared.KeyTemplate{
 // diskTemplates are the fixed rows of a drive card. The per-drive temperature
 // rows ("disk.tempN") are generated from the collected values, because an NVMe
 // drive reports a composite sensor plus one per temperature sensor.
+//
+// The SMART rows sit after the filesystem figures because they describe the
+// drive's health rather than its contents. Each is listed whether or not the
+// drive reported it — deviceView drops the ones with no reading, so a drive
+// that reports no wear shows no wear row while the health badge beside the
+// title still says what the drive's own verdict is.
 var diskTemplates = []shared.KeyTemplate{
 	shared.DiskModel,
 	shared.DiskSerial,
@@ -179,6 +188,14 @@ var diskTemplates = []shared.KeyTemplate{
 	shared.DiskFSTotal,
 	shared.DiskFSUsed,
 	shared.DiskFSFree,
+	shared.DiskSmartLife,
+	shared.DiskSmartWritten,
+	shared.DiskSmartPowerOn,
+	shared.DiskSmartBadSectors,
+	shared.DiskSmartSpare,
+	shared.DiskSmartMediaErr,
+	shared.DiskSmartSelftest,
+	shared.DiskSmartWarnings,
 }
 
 // diskKeyTemplates assembles a drive card's rows: its identity and size, how
@@ -311,7 +328,7 @@ func (a *App) GetData() Data {
 // the history to the device ("gpu0.", "disk1."), so two cards of the same kind
 // never share a range; it is empty for the mainboard, of which there is one.
 func deviceView(data shared.HardwareData, templates []shared.KeyTemplate, history *historyStore, historyPrefix string) DeviceView {
-	view := DeviceView{Name: data.Name}
+	view := DeviceView{Name: data.Name, Status: data.Status}
 
 	// Keep only the rows that carry a value: a device does not have to report
 	// every field (a drive with no serial, a card with no hotspot sensor), and an

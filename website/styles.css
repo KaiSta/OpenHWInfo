@@ -133,9 +133,53 @@ h1 {
     background: var(--surface-2);
 }
 
+.card-text {
+    flex: 1;
+    min-width: 0;
+}
+
 .card-title {
     font-size: 17px;
     font-weight: 600;
+}
+
+/* The device's own health verdict. It is pushed to the far edge of the card
+   head so it reads as a status marker rather than part of the title. */
+.status-pill {
+    margin-left: auto;
+    padding: 5px 11px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+}
+
+.status-pill.good {
+    color: var(--good);
+    background: rgba(47, 209, 122, 0.12);
+    border-color: rgba(47, 209, 122, 0.35);
+}
+
+.status-pill.warn {
+    color: var(--warn);
+    background: rgba(255, 176, 32, 0.12);
+    border-color: rgba(255, 176, 32, 0.35);
+}
+
+.status-pill.bad {
+    color: var(--bad);
+    background: rgba(255, 93, 108, 0.14);
+    border-color: rgba(255, 93, 108, 0.38);
+}
+
+/* A drive that supports a health protocol but has not been read yet: a verdict
+   is shown, but it is not a clean bill of health. */
+.status-pill.unknown {
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--border);
 }
 
 .card-sub {

@@ -104,19 +104,28 @@ func writeMountsFixture(t *testing.T, content string) {
 	t.Cleanup(func() { mountsPath = original })
 }
 
-// stubUDisks stubs the UDisks2 temperature lookup so tests do not reach the
-// host's D-Bus: sysDir is a fixture, so the real provider would short-circuit
-// anyway, but that contract is pinned here and the stub lets the fallback be
-// exercised in isolation.
-func stubUDisks(t *testing.T, temps map[string]float64) {
+// stubUDisks stubs the UDisks2 SMART lookup so tests do not reach the host's
+// D-Bus: sysDir is a fixture, so the real provider would short-circuit anyway,
+// but that contract is pinned here and the stub lets the SMART fallback be
+// exercised in isolation. A nil map means "UDisks2 knows no drive", which is
+// what most tests want.
+func stubUDisks(t *testing.T, drives map[string]smartInfo) {
 	t.Helper()
 
-	original := udisksTemperatureProvider
-	udisksTemperatureProvider = func(blockName string) (float64, bool) {
-		value, ok := temps[blockName]
-		return value, ok
+	original := smartProvider
+	smartProvider = func(blockName string) (smartInfo, bool) {
+		info, ok := drives[blockName]
+		return info, ok
 	}
-	t.Cleanup(func() { udisksTemperatureProvider = original })
+	t.Cleanup(func() { smartProvider = original })
+}
+
+// smartTemp is the SMART reading a temperature-only fallback test needs: a drive
+// whose SMART holds a temperature and nothing else. It is what the real
+// udisksd reports for a drive that supports SMART but has no readable wear or
+// defect figures.
+func smartTemp(celsius float64) smartInfo {
+	return smartInfo{supported: true, updated: true, temperatureC: celsius, hasTemperature: true}
 }
 
 // stubFilesystemUsage replaces the statfs call with fixed sizes per mount point
@@ -563,7 +572,7 @@ func TestSATATempViaUDisksFallback(t *testing.T) {
 	writeSysFixture(t, files)
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
-	stubUDisks(t, map[string]float64{"sda": 27.0})
+	stubUDisks(t, map[string]smartInfo{"sda": smartTemp(27.0)})
 
 	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
 	if got := numericValue(t, sata, "disk.temp0"); math.Abs(got-27.0) > 1e-9 {
@@ -581,7 +590,7 @@ func TestUDisksFallbackIsOnlyUsedWhenHwmonIsMissing(t *testing.T) {
 	writeSysFixture(t, sysfsFixture())
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
-	stubUDisks(t, map[string]float64{"sda": 99.0})
+	stubUDisks(t, map[string]smartInfo{"sda": smartTemp(99.0)})
 
 	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
 	if got := numericValue(t, sata, "disk.temp0"); math.Abs(got-31.0) > 1e-9 {
@@ -617,7 +626,7 @@ func TestNVMETempViaUDisksWhenHwmonMissing(t *testing.T) {
 	writeSysFixture(t, files)
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
-	stubUDisks(t, map[string]float64{"nvme0n1": 49.9})
+	stubUDisks(t, map[string]smartInfo{"nvme0n1": smartTemp(49.9)})
 
 	nvme := driveByModel(t, GetInformations(), "Samsung SSD 990 PRO 2TB")
 	if got := numericValue(t, nvme, "disk.temp0"); math.Abs(got-49.9) > 1e-9 {
@@ -638,7 +647,7 @@ func TestUDisksFallbackIsPerDrive(t *testing.T) {
 	writeSysFixture(t, files)
 	writeMountsFixture(t, "")
 	stubFilesystemUsage(t, nil)
-	stubUDisks(t, map[string]float64{"sda": 27.0}) // only sda has a value
+	stubUDisks(t, map[string]smartInfo{"sda": smartTemp(27.0)}) // only sda has a value
 
 	sata := driveByModel(t, GetInformations(), "SAMSUNG MZ7TE512")
 	if _, ok := sata.Values["disk.temp0"]; !ok {

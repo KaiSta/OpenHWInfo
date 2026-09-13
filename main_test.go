@@ -440,15 +440,22 @@ func TestDiskKeyTemplatesOrder(t *testing.T) {
 		"disk.fs.total":   diskSize(1800),
 		"disk.fs.used":    diskSize(900),
 		"disk.fs.free":    diskSize(900),
+		"disk.smart.life": boardValue(),
 		"disk.temp0":      boardValue(),
 		"disk.tempLabel0": boardLabel("Composite Temperature"),
 		"disk.temp1":      boardValue(),
 		"disk.tempLabel1": boardLabel("Sensor 1 Temperature"),
 	}
 
+	// Identity, size and filesystem first, then the SMART rows, then the
+	// temperature sensors the drive reports. The SMART rows keep their listed
+	// order because they are the fixed part of the card.
 	want := []string{
 		"disk.model", "disk.serial", "disk.firmware", "disk.medium", "disk.size",
 		"disk.fs.total", "disk.fs.used", "disk.fs.free",
+		"disk.smart.life", "disk.smart.written", "disk.smart.hours",
+		"disk.smart.badSectors", "disk.smart.spare", "disk.smart.mediaErrors",
+		"disk.smart.selftest", "disk.smart.warnings",
 		"disk.temp0", "disk.temp1",
 	}
 	if got := keysOfTemplates(diskKeyTemplates(values)); !reflect.DeepEqual(got, want) {
@@ -477,15 +484,25 @@ func TestDiskKeyTemplatesUseSensorLabels(t *testing.T) {
 }
 
 // TestDiskKeyTemplatesMatchCollectorKeyContract mirrors the CPU and board
-// contract tests: every collected temperature must reach the frontend, and the
-// label keys must never become rows themselves.
+// contract tests: every collected reading must reach the frontend, and the
+// label keys must never become rows themselves. The SMART rows are collected by
+// the storage package under keys it does not own, so this is the only place the
+// two halves of that contract meet.
 func TestDiskKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
 	values := map[string]shared.HardwareValue{
-		"disk.model":      boardLabel("SAMSUNG MZ7TE512"),
-		"disk.medium":     boardLabel("SSD"),
-		"disk.size":       diskSize(512),
-		"disk.temp0":      boardValue(),
-		"disk.tempLabel0": boardLabel("Composite Temperature"),
+		"disk.model":             boardLabel("SAMSUNG MZ7TE512"),
+		"disk.medium":            boardLabel("SSD"),
+		"disk.size":              diskSize(512),
+		"disk.temp0":             boardValue(),
+		"disk.tempLabel0":        boardLabel("Composite Temperature"),
+		"disk.smart.life":        boardValue(),
+		"disk.smart.written":     boardValue(),
+		"disk.smart.hours":       boardValue(),
+		"disk.smart.badSectors":  boardValue(),
+		"disk.smart.spare":       boardValue(),
+		"disk.smart.mediaErrors": boardValue(),
+		"disk.smart.selftest":    boardLabel("Success"),
+		"disk.smart.warnings":    boardLabel("spare"),
 	}
 
 	templates := diskKeyTemplates(values)
@@ -499,12 +516,54 @@ func TestDiskKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
 	}
 
 	for key := range values {
-		if !strings.HasPrefix(key, "disk.temp") || strings.HasPrefix(key, "disk.tempLabel") {
+		if strings.HasPrefix(key, "disk.tempLabel") {
 			continue
 		}
 		if !present[key] {
 			t.Errorf("collected key %q has no template and would never be displayed", key)
 		}
+	}
+
+	// A drive that reports no SMART gets no SMART rows: the templates exist, but
+	// the view keeps only the rows that carry a value, so an HDD with no
+	// readable attributes does not show empty wear and spare rows.
+	plain := map[string]shared.HardwareValue{
+		"disk.model":  boardLabel("WDC WD40EFRX-68N"),
+		"disk.medium": boardLabel("HDD"),
+		"disk.size":   diskSize(4000),
+	}
+	view := deviceView(shared.HardwareData{Name: "WDC WD40EFRX-68N", Values: plain},
+		diskKeyTemplates(plain), newHistoryStore(), "disk0.")
+	for _, row := range view.Keys {
+		if strings.HasPrefix(row.Key, "disk.smart.") {
+			t.Errorf("row %q was rendered for a drive that reports no SMART", row.Key)
+		}
+	}
+}
+
+// TestDeviceViewCarriesTheHealthStatus pins that a drive's verdict survives the
+// trip from the collector to the view the frontend renders, and that a device
+// without one (a GPU, say) does not invent a badge.
+func TestDeviceViewCarriesTheHealthStatus(t *testing.T) {
+	verdict := &shared.DeviceStatus{Level: shared.StatusWarn, Text: "SMART: Warning", Detail: "SMART reports: 8 bad sector(s)."}
+
+	disk := deviceView(shared.HardwareData{
+		Name:   "SAMSUNG MZ7TE512",
+		Values: map[string]shared.HardwareValue{"disk.model": boardLabel("SAMSUNG MZ7TE512")},
+		Status: verdict,
+	}, diskKeyTemplates(nil), newHistoryStore(), "disk0.")
+
+	if disk.Status != verdict {
+		t.Errorf("drive status = %+v; want %+v", disk.Status, verdict)
+	}
+
+	gpu := deviceView(shared.HardwareData{
+		Name:   "NVIDIA GeForce GTX 860M",
+		Values: map[string]shared.HardwareValue{"driverVersion": boardLabel("580")},
+	}, gpuTemplates, newHistoryStore(), "gpu0.")
+
+	if gpu.Status != nil {
+		t.Errorf("gpu status = %+v; want none", gpu.Status)
 	}
 }
 

@@ -298,6 +298,100 @@ The following were fixed and are now covered by tests.
     which also removed the hand-written prefix/remap closure the GPU path used
     and made the prefix scoping directly testable.
 
+28. **Drives reported no health verdict.** Wear, defect counts and the drive's
+    own SMART judgement were absent (item 15 below), so a card could show a
+    drive at 40 °C with 90 % of its endurance gone and look identical to a new
+    one. Each drive card now carries a health badge (`SMART: Good`, `Warning`,
+    `Failing` or `Unknown`) with the reason as its tooltip, plus the readings
+    behind it. The design is shaped by one constraint: **the data has to be
+    available to an unprivileged process.**
+    - The source is UDisks2 over D-Bus. udisksd runs privileged and already
+      talks to the drive, so the app needs neither root nor an external tool.
+      `smartctl` (installed on the review host, v7.4) fails as `Permission
+      denied` for a normal user and `nvme-cli` is not installed at all, so
+      neither is a usable source for an app the user launches as themselves.
+    - Both command sets are read through the interfaces that carry them:
+      `Drive.Ata` (failing flag, attributes below threshold, bad sectors,
+      self-test, power-on seconds, and a temperature in Kelvin) and
+      `NVMe.Controller` (critical warnings, power-on hours, and the attribute
+      dictionary with spare capacity, percentage used, bytes written and media
+      errors). The two are normalized into one `smartInfo` so the evaluation
+      does not care which answered.
+    - **Life is derived only from attributes whose meaning is unambiguous.**
+      Vendors reuse attribute ids and normalize them differently, so the
+      attribute *name* (which libatasmart derives from the drive's own IDENTIFY
+      data, and which the UDisks2 documentation calls the authoritative
+      identifier) is matched against an allowlist of three: `ssd-life-left`,
+      `media-wearout-indicator` and `wear-leveling-count`. Each of these counts
+      down from 100 as the media wears and stops at the drive's own fail
+      threshold, so the consumed fraction is measured against that threshold —
+      on the review host's SSD the wear attribute reads 96 against a threshold
+      of 5, reported as 4.21 % used. `percent-lifetime-remain` is deliberately
+      *not* interpreted: some drives put the wear figure in its raw value and
+      leave the normalized value at 100, which would report a worn-out drive as
+      barely used. An allowlist test pins the set and asserts that name stays
+      out.
+    - **Data written comes from both command sets, in the terabytes it is quoted
+      in.** NVMe reports `total_data_written` in bytes; an ATA drive's
+      `Total_LBAs_Written` (attribute 241) is read as the count of 512-byte
+      sectors the standard defines it as, honoring libatasmart's unit when the
+      report names a different byte unit. The attribute is matched by *id*
+      rather than by name, because unlike the endurance attributes its meaning is
+      the same everywhere — only its unit varies (item 21).
+    - The verdict puts the drive's own judgement first — its failing flag, the
+      number of attributes below their threshold, its critical warnings — and
+      only then the app's reading of figures the drive has not faulted:
+      endurance at or above 80 % (warning) or 95 % (failing), spare capacity
+      below its threshold, bad sectors or media errors above zero, a failed
+      self-test. A status a future kernel adds is surfaced as a warning rather
+      than dropped, and an *empty* critical-warning array is the healthy state.
+    - Past events are **notes**, not warnings: the review host's SSD reports
+      `SmartNumAttributesFailedInThePast: 1` (its spare-block attribute dipped
+      below threshold once) while reporting nothing currently failing, so
+      calling the drive unwell would be crying wolf. Notes are listed in the
+      tooltip and leave the badge green.
+    - **Absent is never zero.** The property reader keeps "no reading" apart
+      from "0" for every field, so a drive whose bad-sector count could not be
+      read shows no bad-sector row instead of a clean `0.00`, and a drive whose
+      `SmartUpdated` is 0 — where UDisks2 documents every other SMART property
+      as meaningless — is reported as `Unknown` with no rows at all, rather than
+      healthy. A drive with no SMART support gets no badge: the badge is never a
+      guess.
+    - Read cost is bounded. Properties refresh on a 10 s cache (cheap, served
+      from udisksd), the attribute table on a 60 s cache because it is the one
+      call that commands the drive, and both use UDisks2's `nowakeup` option so
+      a sleeping drive answers with an error instead of being spun up. A drive
+      whose SMART has never been read is asked **once** per process, also with
+      `nowakeup`.
+    - `shared.DeviceStatus` carries the level (`good`/`warn`/`bad`/`unknown`,
+      the vocabulary the bar styles already use), the badge text and the reason,
+      so the frontend needed one pill and one in-place updater rather than any
+      device-specific code.
+
+29. **The temperature fallback and SMART were two independent D-Bus reads.**
+    The SATA temperature fallback queried `SmartTemperature` on its own schedule
+    with its own cache, next to the SMART read that fetches the same property as
+    part of a `GetAll`. The temperature now comes out of the cached SMART
+    reading, so one round trip per drive serves both and the duplicated cache,
+    provider and property-marshalling code (about 110 lines) is gone. The
+    behaviour is unchanged: hwmon wins when it is available, and a drive that
+    reports no temperature still produces no row.
+
+30. **"Terabytes written" was not reported for an ATA drive.** The written row
+    existed for NVMe only, and in gigabytes, so a SATA SSD showed nothing at all
+    and an NVMe figure read `10337.00` instead of `10.34`. The row is now
+    `Data Written (TB)`, in the unit total writes are quoted in (the TBW of an
+    endurance rating), and it is produced from either command set: an NVMe
+    controller's `total_data_written` in bytes, or an ATA drive's attribute 241.
+    The ATA count is converted with the unit libatasmart reports for it — sectors
+    (the ATA definition, which is also how a bare count is read) or megabytes —
+    while a unit that is not a byte count yields no row rather than a converted
+    figure, and a counter the drive reports as zero yields none either: "none"
+    and "nothing" are indistinguishable, and `0.00 TB` would be the app's claim
+    rather than the drive's. The row is driven by the drive, so the review host's
+    own SSD still shows no `Data Written` row — its SMART table (23 attributes,
+    read through both `busctl` and the app) contains no attribute 241.
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
@@ -320,7 +414,7 @@ The following were fixed and are now covered by tests.
 | `amd`      | sysfs-mocked single/multi-card collection, GPU name cleaning and disambiguation |
 | `intel`    | sysfs-mocked single/multi-card collection with an exact name assertion, PCI ID mapping (Arc incl. Battlemage, integrated GPUs must not be named Arc, non-GPU IDs resolve to nothing), table integrity rules, name cleaning, rejection of identifier-only input, and a fallback that always yields a usable name |
 | `mainboard`| sysfs-mocked DMI identity (including a blank/root-only field producing no row), board-zone selection and millidegree conversion, Super I/O temperatures and fans with and without driver labels, chip-name allowlist, sensor caps, unparsable readings |
-| `storage`  | sysfs-mocked drive listing (SATA SSD, NVMe, HDD, and the virtual/optical devices that must not appear), medium and capacity from the rotational flag and sector count, NVMe labels vs a drivetemp chip, rejection of a non-drive hwmon chip, partition-to-disk mapping with a mount-table fixture and a stubbed `statfs` (aggregation, duplicate mounts, an unmappable `dm-0`, an escaped space, a failing lookup, a missing mount table) |
+| `storage`  | sysfs-mocked drive listing (SATA SSD, NVMe, HDD, and the virtual/optical devices that must not appear), medium and capacity from the rotational flag and sector count, NVMe labels vs a drivetemp chip, rejection of a non-drive hwmon chip, partition-to-disk mapping with a mount-table fixture and a stubbed `statfs` (aggregation, duplicate mounts, an unmappable `dm-0`, an escaped space, a failing lookup, a missing mount table); SMART: every health rule as its own case (a healthy drive with exactly one reading broken), Kelvin and wire-type decoding for both interfaces, the life-attribute allowlist and its threshold scaling, the fabrication guards (absent bad-sector count, never-read drive, empty NVMe dictionary), every row's presence *and* unit, and the row→template contract |
 | `shared`   | frequency/power conversion, `ReadSysFile` absence vs zero, glob lookup, DRM vendor-matched card scan, PCI address resolution |
 | `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, and the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows) |
 
@@ -351,6 +445,17 @@ that produced two real bugs. The rendering itself was verified by previewing
   and no min/max history yet, an HDD (head reads "HDD"), a drive whose mount
   could not be measured (identity and temperature rows only, no zero-size rows),
   and a machine with no drives at all (no card).
+- the health badge and the SMART rows: all four levels rendered (`Good` green,
+  `Warning` amber, `Failing` red, `Unknown` muted), the tooltip carrying the
+  reason; an NVMe-shaped drive with every row present and correct bar
+  directions (life rising into red, spare falling into red — the two percentage
+  readings that are better the *lower* and the *higher* they are), a SATA-shaped
+  drive with no NVMe-only rows, a drive with no verdict (no badge), and two
+  drives each keeping their own badge. A verdict change is written onto the
+  existing pill: after a tick that turns `Good` into `Failing`, the card, pill,
+  row and bar are the **same DOM nodes** while the pill's class, text and
+  tooltip and the bar's width and colour are rewritten — so the verdict updates
+  without a rebuild, and the bar transition survives it.
 
 `go test ./...` runs without a GPU or lm-sensors installed; hardware collectors
 are exercised by mocking `sysDir` (`amd`, `intel`) or by testing the pure parsing
@@ -383,7 +488,10 @@ These are known limitations rather than defects, listed roughly by value.
    match on key substrings and the tables are hardcoded in the frontend, so a
    sensor whose key does not match a pattern gets no scale at all. Passing the
    value type and a scale (or a limit) through from the backend would let the
-   collectors own this.
+   collectors own this. The drive health work added two more such branches —
+   `/life/` and `/spare/`, the two percentages that are better the lower and the
+   higher they are — and a third direction if a `Wear Leveling Count` row is ever
+   shown as remaining life rather than consumed life.
 
 5. **The "Auto-refresh · 5s" badge is hardcoded** in the HTML while the interval
    lives in the polling code; the two can drift.
@@ -453,12 +561,13 @@ These are known limitations rather than defects, listed roughly by value.
    dominate it; adding them behind a separate card (or a fixed 12 V/5 V/3.3 V
    scale) would be the way to do it.
 
-15. **Drive health is unread.** Wear levelling, data written, power-on hours and
-   the SMART health verdict all need `smartctl` or `nvme-cli` with root — exactly
-   the kind of privileged call this project has avoided so far. An optional,
-   explicitly enabled SMART card (root-only, cached, since these values change
-   slowly) is the shape that would fit; the temperature and free-space rows
-   already cover what an unprivileged reader can know.
+15. **Drive health needs UDisks2.** SMART is read through udisksd, which is the
+   part that makes it work without root (item 28). A system without udisks2 — a
+   minimal server install, a container — therefore gets no badge and no SMART
+   rows, and there is no fallback: `smartctl` returns `Permission denied` for a
+   normal user, and a root-only fallback would need a password prompt on every
+   poll. A helper that asks for elevation once at startup, or a small setuid
+   reader, would be the way to cover those systems.
 
 16. **A SATA drive's temperature needs the `drivetemp` module.** Without it there
    is no hwmon device under the block device at all, so the drive card shows no
@@ -478,3 +587,37 @@ These are known limitations rather than defects, listed roughly by value.
    `board_name` is an OEM code rather than a marketing name — on the review
    laptop, `board_name` is the friendly `Lenovo Y50-70` while `product_name` is
    the machine type `20378`.
+
+19. **The NVMe path has never run against a real NVMe drive.** The review host's
+   only drive is a SATA SSD (`/dev/sda`, no `/dev/nvme*` and no `nvme-cli`), so
+   the ATA path is verified live end to end — 23 attributes decoded, the wear
+   attribute read as 4.21 % used, `SMART: Good` on the card — while the
+   `NVMe.Controller` path is covered by unit tests that build its replies in the
+   documented wire shapes (byte percentages, uint64 byte counts, Kelvin
+   temperatures, the critical-warning array). The two interfaces differ in
+   exactly those types, which is what the decoding tests pin, but a real
+   controller could still differ in a way the tests do not anticipate.
+
+20. **Which attribute carries endurance varies by vendor, and only three names
+   are interpreted.** The allowlist covers Sandisk/WD/Kingston, Intel/Samsung
+   and Samsung's wear-leveling attribute, which is the large majority of SSDs,
+   but a drive using another name or another convention (Crucial/Micron's
+   `percent-lifetime-remain` is the notable one, ambiguous because some drives
+   put the wear figure in the raw value and leave the normalized value at 100)
+   shows no `Life Used` row at all rather than a wrong one. Extending the list
+   means confirming the direction of the normalized value per vendor, which
+   `smartctl`'s `drivedb` files are the reference for.
+
+21. **An ATA drive's written counter is read in the wrong unit on some models**
+   (item 30). ATA defines attribute 241 as a count of 512-byte sectors, which is
+   how it is read here, but several vendors — the smartmontools drive database
+   names SanDisk and WD families, and its ticket tracker has drives whose output
+   is annotated "(32MB Units)" — count in 32 MiB units instead. Nothing in the
+   reading distinguishes the two conventions, and the error is in the invisible
+   direction: the coarser convention read as sectors *under*-reports by 65536×
+   (200 GB becomes 3.1 MB, i.e. `0.00 TB`), so no plausibility check against the
+   drive's capacity or power-on hours can catch it — a figure that is too small
+   is also always physically possible. Configuring the unit per model, the way
+   `smartctl`'s `drivedb` does, is the only reliable fix and needs a table this
+   project has no way to verify without the drives; the app's own host reports no
+   241 at all, so even the common case could not be checked live here.

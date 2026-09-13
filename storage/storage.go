@@ -2,20 +2,24 @@
 // hard disk's identity, its temperature, and how full the filesystems mounted
 // from it are.
 //
-// Everything comes from sysfs and /proc, so no external tool and no root
-// privilege is required. The temperature of a SATA drive needs the kernel's
-// drivetemp driver (module "drivetemp"), and an NVMe drive's temperature comes
-// from the nvme driver's own hwmon device; both expose their readings through
-// the same tempN_input attributes, so they are read identically. When the
-// drivetemp driver is not loaded (the usual default) the SATA temperature is
-// read from UDisks2's SmartTemperature property instead, which is the same data
-// psensor shows via libatasmart/hddtemp/udisks2 but without requiring raw
-// device access. Deeper SMART data (wear, data written, power-on hours) is
-// deliberately not read: it needs smartctl or nvme-cli with root.
+// Identity, capacity and filesystem usage come from sysfs and /proc, so no
+// external tool and no root privilege is required. The temperature of a SATA
+// drive needs the kernel's drivetemp driver (module "drivetemp"), and an NVMe
+// drive's temperature comes from the nvme driver's own hwmon device; both expose
+// their readings through the same tempN_input attributes, so they are read
+// identically. When the drivetemp driver is not loaded (the usual default) the
+// SATA temperature is read from the drive's SMART data instead, which is the
+// same value psensor shows via libatasmart/udisks2 but without requiring raw
+// device access.
+//
+// The SMART data itself, and the health verdict derived from it, are collected
+// from UDisks2 over D-Bus (see smart.go): udisksd runs privileged and already
+// talks to the drive, so the app needs neither root nor an external tool. Every
+// reading is passive apart from one nowakeup poll of a drive whose SMART has
+// never been read, and a sleeping drive is never spun up.
 package storage
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -95,8 +99,13 @@ func GetInformations() []shared.HardwareData {
 		addFilesystemUsage(values, usage[d.name])
 		addTemperatures(values, d.path, d.name)
 
+		// SMART is read last: it contributes the wear and defect rows and decides
+		// the card's health badge, which stays nil for a drive that reports no
+		// SMART at all rather than claiming the drive is fine.
+		status := addSmart(values, d.name)
+
 		log.Printf("Found drive %s (%s)\n", d.model, d.name)
-		result = append(result, shared.HardwareData{Name: d.model, Values: values})
+		result = append(result, shared.HardwareData{Name: d.model, Values: values, Status: status})
 	}
 
 	return result
@@ -194,10 +203,19 @@ func addFilesystemUsage(values map[string]shared.HardwareValue, usage []fsUsage)
 	values[shared.DiskFSFree.Key] = shared.NewHardwareValue(bytesToGB(free), shared.Gigabyte, shared.Memory)
 }
 
-// bytesToGB converts bytes to decimal gigabytes, the unit used for every size on
-// a drive card so the numbers can be compared with each other.
+// bytesToGB converts bytes to decimal gigabytes, the unit every size on a drive
+// card is reported in — capacity and filesystem usage — so those numbers can be
+// compared with each other.
 func bytesToGB(bytes uint64) float64 {
 	return float64(bytes) / 1e9
+}
+
+// bytesToTB converts bytes to decimal terabytes, the unit the lifetime-written
+// counter is reported in. Total writes are quoted in TB everywhere a drive's
+// endurance is, so a card that showed them in gigabytes would be the only place
+// in the industry that did not.
+func bytesToTB(bytes uint64) float64 {
+	return float64(bytes) / 1e12
 }
 
 // fsUsage is the space accounting of one mounted filesystem.
@@ -390,15 +408,16 @@ func addTemperatures(values map[string]shared.HardwareValue, devicePath, blockNa
 			return
 		}
 	}
-	// No hwmon reading — try UDisks2 (psensor parity). This is the common
-	// path for SATA SSDs when drivetemp is not loaded: psensor's libatasmart
-	// column reads the same SMART temperature that UDisks2 exposes via D-Bus.
-	if celsius, ok := udisksTemperatureProvider(blockName); ok {
+	// No hwmon reading — take the temperature out of the drive's SMART data
+	// (psensor parity). This is the common path for SATA SSDs when drivetemp is
+	// not loaded: psensor's libatasmart column reads the same SMART temperature
+	// that UDisks2 exposes over D-Bus.
+	if info, ok := smartProvider(blockName); ok && info.hasTemperature {
 		label := "Drive Temperature"
 		if strings.HasPrefix(blockName, "nvme") {
 			label = "Composite Temperature"
 		}
-		addTemperature(values, label, celsius)
+		addTemperature(values, label, info.temperatureC)
 	}
 }
 
@@ -498,30 +517,18 @@ func milliCelsius(raw string) (float64, bool) {
 	return float64(milli) / 1000, true
 }
 
-// --- UDisks2 fallback for drive temperatures (psensor parity) ---
-
-// udisksTemperatureProvider is the function used to obtain a drive temperature
-// from UDisks2. It defaults to the real D-Bus query but can be replaced in
-// tests to avoid touching the host's D-Bus when sysDir points at a fixture.
-var udisksTemperatureProvider = realUDisksTemperature
+// --- Shared UDisks2 connection ---
 
 var (
 	udisksConnMu      sync.Mutex
 	udisksConn        *dbus.Conn
 	udisksConnErr     error
 	udisksConnErrTime time.Time
-
-	udisksCacheMu sync.Mutex
-	udisksCache   = make(map[string]udisksCacheEntry)
 )
 
-type udisksCacheEntry struct {
-	value   float64
-	ok      bool
-	fetched time.Time
-}
-
-const udisksCacheTTL = 10 * time.Second
+// udisksTimeout bounds the cheap property reads. udisksd serves them from its
+// own cache once it knows a drive, so the limit only matters when the bus is
+// absent altogether.
 const udisksTimeout = 200 * time.Millisecond
 
 func getUDisksConn() (*dbus.Conn, error) {
@@ -537,9 +544,9 @@ func getUDisksConn() (*dbus.Conn, error) {
 	}
 	if udisksConnErr != nil {
 		// Last SystemBus attempt failed (e.g. no bus on this host). Retry after
-		// a backoff window rather than failing forever; the per-drive cache
-		// already rate-limits callers to udisksCacheTTL, so a 30s window means
-		// at most ~3 extra dial attempts per minute even with many drives.
+		// a backoff window rather than failing forever; the per-drive SMART cache
+		// already rate-limits callers to smartPropsTTL, so a 30s window means at
+		// most ~3 extra dial attempts per minute even with many drives.
 		if time.Since(udisksConnErrTime) < 30*time.Second {
 			return nil, udisksConnErr
 		}
@@ -553,120 +560,4 @@ func getUDisksConn() (*dbus.Conn, error) {
 	}
 	udisksConn = conn
 	return conn, nil
-}
-
-// realUDisksTemperature queries UDisks2's SmartTemperature for a block device.
-// In a fixture (sysDir != "/sys") no query is performed so tests are not
-// polluted by the host's real drive temperatures; tests that want the fallback
-// replace udisksTemperatureProvider with a stub.
-//
-// Results are cached per drive for udisksCacheTTL so a burst of drives does not
-// stall every 5 s poll, and a failing/missing D-Bus does not stall it either.
-func realUDisksTemperature(blockName string) (float64, bool) {
-	if sysDir != "/sys" {
-		return 0, false
-	}
-	udisksCacheMu.Lock()
-	if e, ok := udisksCache[blockName]; ok && time.Since(e.fetched) < udisksCacheTTL {
-		v, ok2 := e.value, e.ok
-		udisksCacheMu.Unlock()
-		return v, ok2
-	}
-	udisksCacheMu.Unlock()
-	val, ok := fetchUDisksTemperature(blockName)
-	udisksCacheMu.Lock()
-	udisksCache[blockName] = udisksCacheEntry{value: val, ok: ok, fetched: time.Now()}
-	udisksCacheMu.Unlock()
-	return val, ok
-}
-
-func fetchUDisksTemperature(blockName string) (float64, bool) {
-	conn, err := getUDisksConn()
-	if err != nil {
-		return 0, false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), udisksTimeout)
-	defer cancel()
-
-	blockPath := dbus.ObjectPath("/org/freedesktop/UDisks2/block_devices/" + blockName)
-	blockObj := conn.Object("org.freedesktop.UDisks2", blockPath)
-
-	var v dbus.Variant
-	if err := blockObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.UDisks2.Block", "Drive").Store(&v); err != nil {
-		return 0, false
-	}
-	drivePath, ok := v.Value().(dbus.ObjectPath)
-	if !ok {
-		if s, ok2 := v.Value().(string); ok2 {
-			drivePath = dbus.ObjectPath(s)
-		} else {
-			return 0, false
-		}
-	}
-	if drivePath == "/" || drivePath == "" {
-		return 0, false
-	}
-	driveObj := conn.Object("org.freedesktop.UDisks2", drivePath)
-
-	// ATA: SmartTemperature is a double in Kelvin (0 means unknown).
-	var av dbus.Variant
-	if err := driveObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.UDisks2.Drive.Ata", "SmartTemperature").Store(&av); err == nil {
-		switch val := av.Value().(type) {
-		case float64:
-			if val > 200 && val < 500 {
-				return val - 273.15, true
-			}
-		case float32:
-			if float64(val) > 200 && float64(val) < 500 {
-				return float64(val) - 273.15, true
-			}
-		case uint16:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case uint32:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case uint64:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case int16:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case int32:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		}
-	}
-	// NVMe: SmartTemperature is a uint16 in Kelvin.
-	var nv dbus.Variant
-	if err := driveObj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.UDisks2.NVMe.Controller", "SmartTemperature").Store(&nv); err == nil {
-		switch val := nv.Value().(type) {
-		case uint16:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case uint32:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case uint64:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case int16:
-			if val != 0 {
-				return float64(val) - 273.15, true
-			}
-		case float64:
-			if val > 200 && val < 500 {
-				return val - 273.15, true
-			}
-		}
-	}
-	return 0, false
 }

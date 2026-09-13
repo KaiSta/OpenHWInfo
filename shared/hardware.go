@@ -22,6 +22,10 @@ const (
 	// unit values keep their numbers. Drive capacities and filesystem sizes are
 	// reported in GB because that is how drives are sold and labelled.
 	Gigabyte
+	// Terabyte is the unit of the lifetime-written counter a drive's SMART data
+	// carries: total writes are quoted in TB (the "TBW" of an endurance rating),
+	// not in the gigabytes capacities are sold in.
+	Terabyte
 )
 
 // HardwareValue represents a hardware metric with its value and metadata
@@ -43,10 +47,35 @@ const (
 	Memory
 )
 
+// DeviceStatus is a device's own verdict about itself, shown as a badge on its
+// card. Level is one of the values the frontend already styles for metric bars
+// ("good", "warn", "bad") plus "unknown", so a verdict reuses the palette
+// rather than introducing a second one. Detail explains the verdict and is
+// surfaced as the badge's tooltip, because a warning a user cannot account for
+// is worse than no warning.
+type DeviceStatus struct {
+	Level  string
+	Text   string
+	Detail string
+}
+
+// Status levels. "unknown" means the device supports a health protocol but no
+// reading of it is available yet — different from having no verdict at all,
+// which is a nil Status.
+const (
+	StatusGood    = "good"
+	StatusWarn    = "warn"
+	StatusBad     = "bad"
+	StatusUnknown = "unknown"
+)
+
 // HardwareData represents a collection of hardware values
 type HardwareData struct {
 	Name   string
 	Values map[string]HardwareValue
+	// Status is the device's health verdict, or nil for devices that do not
+	// report one (GPUs, the mainboard).
+	Status *DeviceStatus
 }
 
 // HasTelemetry reports whether the data carries any reading beyond its identity
