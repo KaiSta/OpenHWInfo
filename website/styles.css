@@ -102,9 +102,15 @@ h1 {
     100% { box-shadow: 0 0 0 0 rgba(47, 209, 122, 0); }
 }
 
+/* Two cards per row at the default window, one below about 1080px of viewport.
+   520px is a *preference*, not the thing that keeps the tables whole: the widest
+   table (a drive's 13 rows) reads without wrapping at that width, and it is the
+   narrowest a card can be given the window's own minimum of 560px and the
+   page's 20px of padding per side. Cards that end up narrower than their table
+   are handled by the table itself — see .table-wrap. */
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
     gap: 20px;
 }
 
@@ -188,17 +194,31 @@ h1 {
     margin-top: 2px;
 }
 
+/* The metric table is sized by the card, never the other way round. The label
+   column can break anywhere and the long text columns wrap (see .label-cell), so
+   the four columns fit a card that is narrower than their full widths used to
+   demand; the headers and the figures keep their own minimum. The wrapper is the
+   backstop: whatever still does not fit becomes a scrollbar the user can reach,
+   rather than pixels the card's own overflow silently cut off. */
+.table-wrap {
+    overflow-x: auto;
+}
+
 table {
     width: 100%;
     border-collapse: collapse;
 }
 
 th, td {
-    padding: 12px 18px;
+    padding: 12px 14px;
     text-align: left;
     font-size: 14px;
     border-bottom: 1px solid rgba(35, 45, 66, 0.6);
 }
+
+/* A cell must never spill out of itself, so a token too long for its column is
+   broken rather than allowed to overrun the cell beside it. */
+td { overflow-wrap: break-word; }
 
 th {
     color: var(--muted);
@@ -207,15 +227,33 @@ th {
     font-size: 12px;
     letter-spacing: 0.4px;
     background: rgba(255, 255, 255, 0.02);
+    /* The headers are single short words, so keeping them whole costs a card
+       nothing; the wrapper handles the pathological case. */
+    white-space: nowrap;
 }
 
 tbody tr:last-child td { border-bottom: none; }
 
 tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
 
-.label-cell { color: var(--text); font-weight: 500; }
+/* The label is the column that gives way when a card is narrow: `anywhere` (not
+   `break-word`) makes its minimum width a single character, so a long model name
+   or serial number breaks instead of setting a minimum width the card has to
+   exceed — which is what used to push the last column out of the card. The
+   figures keep their own minimum width, so a reading like "58.00 °C" does not
+   split over two lines while a label breaks around it. */
+.label-cell { color: var(--text); font-weight: 500; overflow-wrap: anywhere; }
 .value-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
-.minmax { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.minmax {
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    /* A figure is one reading, so it keeps its width and never splits; at the
+       narrowest window (560px, a 520px card) it is the label and value columns
+       that give way instead. This is what the table's minimum width rests on,
+       and below it the wrapper scrolls. */
+    white-space: nowrap;
+}
 
 /* Progress bar under a value */
 .bar-wrap { margin-top: 8px; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }

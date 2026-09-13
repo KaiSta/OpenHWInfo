@@ -201,7 +201,13 @@ function buildCardShell(iconSrc, title, subtitle) {
     thead.innerHTML = "<tr><th>Metric</th><th>Current</th><th>Min</th><th>Max</th></tr>";
     table.appendChild(thead);
     table.appendChild(makeEl("tbody"));
-    section.appendChild(table);
+
+    // The table gets its own scroll container, so a card narrower than its
+    // table shows a scrollbar the user can reach rather than having the last
+    // column clipped by the card's own overflow.
+    var tableWrap = makeEl("div", "table-wrap");
+    tableWrap.appendChild(table);
+    section.appendChild(tableWrap);
     return section;
 }
 

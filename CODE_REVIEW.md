@@ -515,6 +515,61 @@ The following were fixed and are now covered by tests.
       battery that publishes little shows little. A supply that reports nothing
       but its type is not given a card at all.
 
+35. **The metric table was wider than the card holding it, so the Max column was
+    clipped away.** Reported as "only min values are there" on drives and "max is
+    cut off" on the mainboard and battery cards; both were one cause. The grid
+    asked for columns of 340px (`repeat(auto-fit, minmax(340px, 1fr))`), which at
+    the default 1180px window lays out three cards per row of 366px each, while
+    the tables inside them need 375px (CPU), 410px (battery), 411px (GPU), 416px
+    (mainboard) and 433px (a drive's 13 rows). A table cannot shrink below its
+    content, so it grew past the card and `.card`'s own `overflow: hidden` cut the
+    last column off — the Max figures, header included. Measured in the webview at
+    that width: `scrollWidth 433 > cardWidth 367` and `maxColumnVisible: false`
+    on five of the six cards, the 7-row memory card being the one that fit. Just
+    letting the figures wrap was measured and does not fix it either: at a 367px
+    card the mainboard still needed 385px and a drive 408px, because the labels
+    and values are long on their own.
+    - **The table is now sized by its card, not the other way round.** The label
+      column can break anywhere (`overflow-wrap: anywhere`), so its minimum width
+      is a single character and a long model name or serial number breaks instead
+      of setting a minimum the card has to exceed; `td` generally is
+      `overflow-wrap: break-word`, so no cell can overrun the one beside it. The
+      min/max cells and the headers stay `nowrap` — a figure like `502.93 GB`
+      broken over two lines reads as two readings — so every other column gives
+      way before those do.
+    - **Residual overflow is a scrollbar now, not missing pixels.** Each table sits
+      in a `.table-wrap` with `overflow-x: auto`, built by `buildCardShell` in
+      `website/app.js`, so the card's own `overflow: hidden` — the thing that
+      clipped the column — is never reached: content that does not fit is
+      reachable by scrolling. That floor, set by the nowrap headers and figures,
+      measured 328–397px depending on the card, well under the 520px a card is at
+      the smallest window the app allows.
+    - The grid minimum of **520px** is now a preference rather than the
+      guarantee: it is the narrowest a card can be given the window's own
+      `MinWidth: 560` and the page's 20px of side padding, and the widest table
+      reads without wrapping at that width. The default 1180px window shows two
+      cards per row, one below about 1080px of viewport.
+    - Measured against the real payload after the change: **no card overflowed at
+      any width tried**, and no wrapper scrolled while the card was at or above
+      the app's own minimum. At the 1180px and 860px windows nothing wrapped at
+      all; at the 560px window (a 520px card, the narrowest reachable) three
+      *labels* wrapped and no figure or value did; at a forced 360px card the four
+      widest tables floored at 369–397px and scrolled; a 60-character unbreakable
+      label broke over three lines at 520px instead of pushing the table out, and
+      a 120-character unbreakable value made the drive card's wrapper scroll
+      rather than hide its Max column.
+    - Nothing automated would notice a layout regression (see opportunity 10), but
+      the failure mode is no longer silent: a card that cannot hold its table
+      shows a scrollbar the user can reach instead of a column that is simply
+      gone.
+    - The remaining floor is the *card head*, not the table: measured at 131px for
+      a plain card and 286px for the drive card, whose `SMART: Good` pill and
+      subtitle are what hold it open (at a forced 120px the head overflows its
+      card, the table wrapper still scrolls). That is well under the 520px a card
+      has at the smallest window the app allows, so it cannot arise here; making
+      the head shrink too would mean wrapping the status pill, which is worth
+      doing only if a card ever gets a much shorter minimum.
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
@@ -659,7 +714,12 @@ These are known limitations rather than defects, listed roughly by value.
 10. **The frontend is untested.** Every UI guarantee above rests on manual
    preview runs. A small DOM harness (the ones used during review were deleted so
    they cannot be embedded by `//go:embed all:website`) plus a headless runner
-   would turn those checks into regressions.
+   would turn those checks into regressions. The layout check of item 35 is a
+   cheap first case for it: dump `GetData` from a probe test, inline
+   `styles.css`/`app.js` and the payload into one page, force the card widths
+   with `grid-template-columns`, then assert that no card's `scrollWidth` exceeds
+   its `clientWidth` and that the min/max cells hold one line at every width the
+   window allows.
 
 11. **A multi-package machine reports only its hottest package temperature.**
    Core numbers restart per package and sysfs does not say which coretemp chip
