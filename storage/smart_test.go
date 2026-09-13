@@ -881,8 +881,8 @@ func TestClearAttributeReadingsDropsOnlyTheAttributeReadings(t *testing.T) {
 // --- Row contract ----------------------------------------------------
 
 // TestAddSmartEmitsTheExpectedRows pins both the presence and the unit of every
-// row a fully reporting drive produces, because the frontend scales a row by
-// its key and prints the unit in its label.
+// row a fully reporting drive produces. Each unit is asserted because the row's
+// label no longer spells one out: the display derives it from the unit.
 func TestAddSmartEmitsTheExpectedRows(t *testing.T) {
 	info := healthyNVMe()
 	info.badSectors, info.hasBadSectors = 3, true
@@ -906,7 +906,7 @@ func TestAddSmartEmitsTheExpectedRows(t *testing.T) {
 		// filesystem sizes stay in gigabytes.
 		"disk.smart.written":     {41, shared.Terabyte},
 		"disk.smart.life":        {3, shared.Percent},
-		"disk.smart.hours":       {120, shared.UnknownUnit},
+		"disk.smart.hours":       {120, shared.Hour},
 		"disk.smart.badSectors":  {3, shared.UnknownUnit},
 		"disk.smart.spare":       {100, shared.Percent},
 		"disk.smart.mediaErrors": {0, shared.UnknownUnit},

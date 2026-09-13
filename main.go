@@ -308,8 +308,11 @@ func (a *App) GetData() Data {
 		cpuStringValues[key] = formatValue(value)
 	}
 
-	// Update history and calculate min/max values for CPU
+	// Update history and calculate min/max values for CPU. The history holds bare
+	// numbers, so each range takes the unit of the reading it describes.
 	cpuMinValues, cpuMaxValues := cpuHistory.updateAndCalculate(cpuData.Values)
+	cpuMinValues = withUnits(cpuMinValues, cpuData.Values)
+	cpuMaxValues = withUnits(cpuMaxValues, cpuData.Values)
 
 	return Data{
 		CpuKeys:      filteredCpuKeys,
@@ -355,12 +358,14 @@ func deviceView(data shared.HardwareData, templates []shared.KeyTemplate, histor
 	minValues, maxValues := history.updateAndCalculate(scoped)
 
 	view.MinValues = make(map[string]string, len(minValues))
-	for key, value := range minValues {
-		view.MinValues[strings.TrimPrefix(key, historyPrefix)] = value
+	for key, text := range minValues {
+		plain := strings.TrimPrefix(key, historyPrefix)
+		view.MinValues[plain] = withUnit(text, data.Values[plain].Unit)
 	}
 	view.MaxValues = make(map[string]string, len(maxValues))
-	for key, value := range maxValues {
-		view.MaxValues[strings.TrimPrefix(key, historyPrefix)] = value
+	for key, text := range maxValues {
+		plain := strings.TrimPrefix(key, historyPrefix)
+		view.MaxValues[plain] = withUnit(text, data.Values[plain].Unit)
 	}
 
 	return view
@@ -427,15 +432,39 @@ func calculateMinMax(values []float64) (float64, float64) {
 	return min, max
 }
 
-// formatValue converts a HardwareValue to a display string.
+// formatValue converts a HardwareValue to a display string. A numeric reading
+// gets its unit appended, so every row states what it is measuring; a reading a
+// collector already stored as text is passed through, because the fallback paths
+// that produce those strings embed their own unit.
 func formatValue(value shared.HardwareValue) string {
 	if valStr, ok := value.Value.(string); ok {
 		return valStr
 	}
 	if valFloat, ok := value.Value.(float64); ok {
-		return fmt.Sprintf("%.2f", valFloat)
+		return withUnit(fmt.Sprintf("%.2f", valFloat), value.Unit)
 	}
 	return fmt.Sprintf("%v", value.Value)
+}
+
+// withUnit appends a unit's display suffix to an already-formatted value.
+func withUnit(text string, unit shared.HardwareUnit) string {
+	suffix := unit.Suffix()
+	if text == "" || suffix == "" {
+		return text
+	}
+	return text + " " + suffix
+}
+
+// withUnits gives each formatted figure the unit of the reading it describes.
+// The min/max figures come out of the history as bare numbers, so without this
+// a row's Current column would carry a unit while its Min and Max columns did
+// not.
+func withUnits(texts map[string]string, values map[string]shared.HardwareValue) map[string]string {
+	out := make(map[string]string, len(texts))
+	for key, text := range texts {
+		out[key] = withUnit(text, values[key].Unit)
+	}
+	return out
 }
 
 func main() {

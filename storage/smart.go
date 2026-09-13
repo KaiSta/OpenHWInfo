@@ -953,7 +953,7 @@ func addSmart(values map[string]shared.HardwareValue, blockName string) *shared.
 		values[shared.DiskSmartWritten.Key] = shared.NewHardwareValue(bytesToTB(info.writtenBytes), shared.Terabyte, shared.Memory)
 	}
 	if info.powerOnHours > 0 {
-		values[shared.DiskSmartPowerOn.Key] = shared.NewHardwareValue(float64(info.powerOnHours), shared.UnknownUnit, shared.Usage)
+		values[shared.DiskSmartPowerOn.Key] = shared.NewHardwareValue(float64(info.powerOnHours), shared.Hour, shared.Usage)
 	}
 	if info.hasBadSectors {
 		values[shared.DiskSmartBadSectors.Key] = shared.NewHardwareValue(float64(info.badSectors), shared.UnknownUnit, shared.Usage)

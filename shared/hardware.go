@@ -26,7 +26,43 @@ const (
 	// carries: total writes are quoted in TB (the "TBW" of an endurance rating),
 	// not in the gigabytes capacities are sold in.
 	Terabyte
+	// Hour is the unit of the SMART power-on counter.
+	Hour
 )
+
+// Suffix is the unit text shown beside a value, and the only place a unit
+// becomes display text. Deriving it from the unit rather than spelling it into a
+// row label is what stops a value and its label from disagreeing about what is
+// being measured -- the failure behind a lifetime-write count that was labelled
+// in terabytes while the number was something else entirely.
+//
+// Megabyte is binary despite the name: every collector that uses it either
+// divides by 1024*1024 (amd.parseMemoryValue) or receives MiB from its source
+// (nvidia-smi reports memory.total in MiB), so it is rendered as MiB.
+func (u HardwareUnit) Suffix() string {
+	switch u {
+	case Celsius:
+		return "°C"
+	case MHz:
+		return "MHz"
+	case Percent:
+		return "%"
+	case Watt:
+		return "W"
+	case Megabyte:
+		return "MiB"
+	case Gigabyte:
+		return "GB"
+	case Terabyte:
+		return "TB"
+	case RPM:
+		return "RPM"
+	case Hour:
+		return "h"
+	}
+	// UnknownUnit carries no text, and an unrecognised unit is not guessed at.
+	return ""
+}
 
 // HardwareValue represents a hardware metric with its value and metadata
 type HardwareValue struct {

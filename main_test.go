@@ -585,15 +585,70 @@ func TestDeviceViewScopesHistoryPerDevice(t *testing.T) {
 		Values: map[string]shared.HardwareValue{"disk.temp0": diskTemp(70)},
 	}, diskKeyTemplates(map[string]shared.HardwareValue{"disk.temp0": diskTemp(70)}), second, "disk1.")
 
-	if got := cold.MaxValues["disk.temp0"]; got != "30.00" {
+	// The unit travels with the figure, so the range states what it measures.
+	if got := cold.MaxValues["disk.temp0"]; got != "30.00 °C" {
 		t.Errorf("drive 0 max = %q; want its own reading", got)
 	}
-	if got := warm.MaxValues["disk.temp0"]; got != "70.00" {
+	if got := warm.MaxValues["disk.temp0"]; got != "70.00 °C" {
 		t.Errorf("drive 1 max = %q; want its own reading", got)
 	}
 	for key := range cold.MinValues {
 		if strings.Contains(key, ".disk") || strings.HasPrefix(key, "disk0") {
 			t.Errorf("history prefix leaked into the view under key %q", key)
+		}
+	}
+}
+
+// TestFormatValueAppendsTheUnit covers why the unit belongs to the reading: a
+// numeric value states what it measures, so a row cannot be labelled in one unit
+// while carrying a figure in another.
+func TestFormatValueAppendsTheUnit(t *testing.T) {
+	cases := []struct {
+		name  string
+		value shared.HardwareValue
+		want  string
+	}{
+		{"terabytes", shared.NewHardwareValue(14.95, shared.Terabyte, shared.Memory), "14.95 TB"},
+		{"percent", shared.NewHardwareValue(4.2, shared.Percent, shared.Usage), "4.20 %"},
+		{"celsius", shared.NewHardwareValue(38.625, shared.Celsius, shared.Temperature), "38.62 °C"},
+		{"mebibytes", shared.NewHardwareValue(24564.0, shared.Megabyte, shared.Memory), "24564.00 MiB"},
+		{"hours", shared.NewHardwareValue(120.0, shared.Hour, shared.Usage), "120.00 h"},
+		// A unit the app does not describe renders bare rather than guessed at.
+		{"unknown unit", shared.NewHardwareValue(120.0, shared.UnknownUnit, shared.Usage), "120.00"},
+		// Text values come from fallback paths that embed their own unit.
+		{"text is passed through", shared.NewHardwareValue("N/A MHz", shared.MHz, shared.Frequency), "N/A MHz"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatValue(tc.value); got != tc.want {
+				t.Errorf("formatValue = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMinMaxCarryTheSameUnitAsTheReading keeps a row's three numeric columns
+// consistent. The history stores bare numbers, so the unit has to be attached
+// while the reading it describes is still in hand.
+func TestMinMaxCarryTheSameUnitAsTheReading(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		"disk.smart.written": shared.NewHardwareValue(14.95, shared.Terabyte, shared.Memory),
+	}
+	view := deviceView(shared.HardwareData{Name: "drive", Values: values},
+		diskKeyTemplates(values), newHistoryStore(), "disk0.")
+
+	columns := map[string]string{
+		"current": view.Values["disk.smart.written"],
+		"min":     view.MinValues["disk.smart.written"],
+		"max":     view.MaxValues["disk.smart.written"],
+	}
+	for name, column := range columns {
+		if column == "" {
+			t.Fatalf("%s column is missing", name)
+		}
+		if !strings.HasSuffix(column, " TB") {
+			t.Errorf("%s column = %q; want it to carry the reading's unit (TB)", name, column)
 		}
 	}
 }
