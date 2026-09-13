@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#7c5cff"/>
+    </linearGradient>
+  </defs>
+  <!-- Badge background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Memory module PCB -->
+  <rect x="72" y="160" width="368" height="168" rx="20" fill="#ffffff"/>
+
+  <!-- Memory chips along the module -->
+  <rect x="104" y="192" width="56" height="56" rx="8" fill="#1a2234"/>
+  <rect x="176" y="192" width="56" height="56" rx="8" fill="#1a2234"/>
+  <rect x="248" y="192" width="56" height="56" rx="8" fill="#1a2234"/>
+  <rect x="320" y="192" width="56" height="56" rx="8" fill="#1a2234"/>
+
+  <!-- Contact edge, with the module's keying notch -->
+  <rect x="88" y="288" width="336" height="14" rx="5" fill="#1a2234"/>
+  <rect x="238" y="284" width="20" height="22" rx="4" fill="#ffffff"/>
+</svg>

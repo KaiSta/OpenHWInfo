@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/KaiSta/OpenHWInfo/memory"
 	"github.com/KaiSta/OpenHWInfo/shared"
 )
 
@@ -537,6 +538,97 @@ func TestDiskKeyTemplatesMatchCollectorKeyContract(t *testing.T) {
 	for _, row := range view.Keys {
 		if strings.HasPrefix(row.Key, "disk.smart.") {
 			t.Errorf("row %q was rendered for a drive that reports no SMART", row.Key)
+		}
+	}
+}
+
+// TestMemTemplatesMatchCollectorKeyContract mirrors the other contract tests for
+// the memory card: every key the collector writes must be named by a template,
+// or the reading would be collected and never displayed. The template list is
+// the fixed one in memTemplates, so this is where the collector's keys and the
+// card's rows have to agree.
+func TestMemTemplatesMatchCollectorKeyContract(t *testing.T) {
+	present := make(map[string]bool, len(memTemplates))
+	for _, tpl := range memTemplates {
+		if present[tpl.Key] {
+			t.Errorf("key %q has two templates", tpl.Key)
+		}
+		present[tpl.Key] = true
+	}
+
+	// The keys the collector reports, taken from the collector itself. A machine
+	// without swap or without PSI simply reports fewer of them.
+	data := memory.GetInformations()
+	if len(data.Values) == 0 {
+		t.Skipf("no memory data on this host (%s unreadable)", "/proc/meminfo")
+	}
+	for key := range data.Values {
+		if !present[key] {
+			t.Errorf("collected key %q has no template and would never be displayed", key)
+		}
+	}
+
+	// And the reverse: every template the collector can fill is one it knows how
+	// to fill, so a template named here is not a row that can never appear.
+	known := map[string]bool{
+		shared.MemTotal.Key:        true,
+		shared.MemUsed.Key:         true,
+		shared.MemAvailable.Key:    true,
+		shared.MemUsage.Key:        true,
+		shared.SwapTotal.Key:       true,
+		shared.SwapUsed.Key:        true,
+		shared.SwapUsage.Key:       true,
+		shared.MemPressureSome.Key: true,
+		shared.MemPressureFull.Key: true,
+	}
+	for _, tpl := range memTemplates {
+		if !known[tpl.Key] {
+			t.Errorf("template %q names no key the memory collector writes", tpl.Key)
+		}
+	}
+}
+
+// TestMemTemplatesOrder pins the reading order of the memory card: the RAM the
+// machine holds, how much of it is in use, what is left, then swap and finally
+// the kernel's pressure-stall averages.
+func TestMemTemplatesOrder(t *testing.T) {
+	got := keysOfTemplates(memTemplates)
+	want := []string{
+		"mem.total", "mem.used", "mem.available", "mem.usage",
+		"swap.total", "swap.used", "swap.usage",
+		"mem.pressure.some", "mem.pressure.full",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("memTemplates has %d rows; want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %q; want %q (full order %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestMemoryViewKeepsOnlyReportedRows covers the swapless machine: the swap
+// templates exist, but a machine that reports no swap shows no swap rows rather
+// than three zeroes.
+func TestMemoryViewKeepsOnlyReportedRows(t *testing.T) {
+	values := map[string]shared.HardwareValue{
+		shared.MemTotal.Key:     shared.NewHardwareValue(16.0, shared.Gibibyte, shared.Memory),
+		shared.MemUsed.Key:      shared.NewHardwareValue(12.0, shared.Gibibyte, shared.Memory),
+		shared.MemAvailable.Key: shared.NewHardwareValue(4.0, shared.Gibibyte, shared.Memory),
+		shared.MemUsage.Key:     shared.NewHardwareValue(75.0, shared.Percent, shared.Usage),
+	}
+
+	view := deviceView(shared.HardwareData{Name: "Memory", Values: values},
+		memTemplates, newHistoryStore(), "")
+
+	if len(view.Keys) != 4 {
+		t.Fatalf("expected 4 rows for a swapless machine, got %v", keysOfTemplates(view.Keys))
+	}
+	for _, row := range view.Keys {
+		if strings.HasPrefix(row.Key, "swap.") || strings.HasPrefix(row.Key, "mem.pressure.") {
+			t.Errorf("row %q was rendered without a reading", row.Key)
 		}
 	}
 }

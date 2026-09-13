@@ -1,6 +1,6 @@
 # OpenHWInfo
 
-A native desktop hardware monitor (CPU + GPU) built with [Wails](https://wails.io). The Go backend collects live sensor data and the embedded webview renders it, refreshing every 5 seconds.
+A native desktop hardware monitor (CPU, memory, GPU, storage and mainboard) built with [Wails](https://wails.io). The Go backend collects live sensor data and the embedded webview renders it, refreshing every 5 seconds.
 
 ## Build & Run
 
@@ -146,6 +146,17 @@ VRAM is not read yet — see the Arc item under *Remaining opportunities* in
 ### Common behaviour
 
 A sensor file that does not exist produces **no metric**, rather than a zero reading — a card with no hotspot sensor or no power cap simply omits those rows. Similarly, a card that exposes no readable sensors at all (for example an integrated GPU whose hwmon directory is absent) is not rendered as an empty card.
+
+## Memory infos
+
+`/proc/meminfo` (RAM and swap) and `/proc/pressure/memory` (the kernel's own pressure accounting) — one card for the machine
+
+* **Memory Total**, **Used** and **Available**, in binary GiB — a machine sold as 16 GB reports exactly `16.00 GiB`. `Used` is `Total − Available`, the same figure `free` prints: `MemAvailable` is the kernel's estimate of what a new workload could claim without swapping, whereas `MemFree` ignores the reclaimable cache and would report a healthy machine as nearly full.
+* **Memory Usage** — the used share of total.
+* **Swap Total**, **Used** and **Usage** — only on a machine that has swap configured. A system with no swap reports no swap rows rather than three zeroes.
+* **Memory Pressure (some)** and **(full)** — the share of the last ten seconds during which tasks were stalled waiting for memory. `some` counts the windows in which at least one task stalled, `full` only those in which every task did, so `full` is the stronger signal that a machine is actually struggling. Both are absent on a kernel built without PSI.
+
+`Used` and `Available` are derived from one reading, so they are only shown together: a machine whose availability cannot be read shows `Total` on its own, because a guess rendered as `0.00 GiB used` would be the app's claim rather than the kernel's. Kernels before 3.14 do not report `MemAvailable`; the figure is then derived the way those kernels' tooling derived it, from free memory plus the reclaimable caches.
 
 ## Storage infos
 

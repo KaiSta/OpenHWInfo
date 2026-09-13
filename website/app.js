@@ -38,6 +38,11 @@ function gauge(key, valStr, values) {
     if (/temp|tccd|pch/i.test(key)) return frac(val, temperatureLimit(key));
     if (/usage|percent/i.test(key)) return frac(val, 100);
 
+    // A pressure figure is the share of the last 10 seconds during which tasks
+    // were stalled on memory, so it is a percentage even though its key says
+    // neither "usage" nor "percent".
+    if (/pressure/i.test(key)) return frac(val, 100);
+
     // A drive's consumed endurance behaves like a usage figure: more is worse.
     if (/life/i.test(key)) return frac(val, 100);
 
@@ -60,8 +65,13 @@ function gauge(key, valStr, values) {
 
     // A "used" metric is scaled against its own total, which lives under
     // a sibling key rather than in the key name.
-    var totalKey = /vram\.used/i.test(key) ? "vram.total"
-        : (/disk\.fs\.used/i.test(key) ? "disk.fs.total" : null);
+    var totals = {
+        "vram.used": "vram.total",
+        "disk.fs.used": "disk.fs.total",
+        "mem.used": "mem.total",
+        "swap.used": "swap.total"
+    };
+    var totalKey = totals[key];
     if (totalKey) {
         var total = num(values[totalKey]);
         if (total && total > 0) return frac(val, total);
@@ -638,6 +648,33 @@ function render(data) {
             updateTemps(card, coreTempKeys, cpuValues, cpuMinValues, cpuMaxValues);
         }
     }];
+
+    // The memory card is a single device like the mainboard, so it shares the
+    // metric renderer and keeps its own history under no prefix.
+    var memory = data.Memory;
+    if (memory && memory.Keys && memory.Keys.length) {
+        var memKeys = memory.Keys;
+        var memValues = memory.Values || {};
+        var memMinValues = memory.MinValues || {};
+        var memMaxValues = memory.MaxValues || {};
+        var memLabels = labelsOf(memKeys);
+        var memTitle = memory.Name || "Memory";
+        var memSubtitle = "System memory · " + memKeys.length + " metrics";
+        specs.push({
+            key: "memory",
+            signature: [memTitle, memSubtitle, memKeys.map(keyOf).join(",")].join("|"),
+            create: function () {
+                var card = buildCardShell("/resources/mem.svg", memTitle, memSubtitle);
+                updateMetrics(card.querySelector("tbody"), memKeys, memLabels,
+                    memValues, memMinValues, memMaxValues);
+                return card;
+            },
+            update: function (card) {
+                updateMetrics(card.querySelector("tbody"), memKeys, memLabels,
+                    memValues, memMinValues, memMaxValues);
+            }
+        });
+    }
 
     // The mainboard card is only present when the board reports something
     // (some systems have no SMBIOS and no board sensors). Its rows are one

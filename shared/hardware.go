@@ -28,6 +28,12 @@ const (
 	Terabyte
 	// Hour is the unit of the SMART power-on counter.
 	Hour
+	// Gibibyte is the binary counterpart of Gigabyte, used for memory. RAM and
+	// swap are quoted in GiB — a 16 GiB machine holds exactly 16 GiB — while a
+	// drive's capacity is quoted in the decimal GB it is sold in. Rendering both
+	// as "GB" would make the two disagree by 7% on every machine, so the units
+	// stay distinct.
+	Gibibyte
 )
 
 // Suffix is the unit text shown beside a value, and the only place a unit
@@ -59,6 +65,8 @@ func (u HardwareUnit) Suffix() string {
 		return "RPM"
 	case Hour:
 		return "h"
+	case Gibibyte:
+		return "GiB"
 	}
 	// UnknownUnit carries no text, and an unrecognised unit is not guessed at.
 	return ""

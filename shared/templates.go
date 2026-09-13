@@ -63,6 +63,29 @@ var (
 	DiskSmartWarnings   = KeyTemplate{"SMART Warnings", "disk.smart.warnings"}
 )
 
+// Memory template variables. A machine reports the same rows on every poll, so
+// these are fixed templates rather than generated ones. The swap rows are only
+// collected when swap is configured, and the pressure rows only when the kernel
+// provides them; deviceView drops the templates the collector did not fill, so a
+// swapless machine shows no swap rows rather than three zeroes.
+var (
+	MemTotal     = KeyTemplate{"Memory Total", "mem.total"}
+	MemUsed      = KeyTemplate{"Memory Used", "mem.used"}
+	MemAvailable = KeyTemplate{"Memory Available", "mem.available"}
+	MemUsage     = KeyTemplate{"Memory Usage", "mem.usage"}
+
+	SwapTotal = KeyTemplate{"Swap Total", "swap.total"}
+	SwapUsed  = KeyTemplate{"Swap Used", "swap.used"}
+	SwapUsage = KeyTemplate{"Swap Usage", "swap.usage"}
+
+	// Pressure is the kernel's own stall accounting: the share of the last 10
+	// seconds during which tasks were stalled waiting for memory. "some" counts
+	// any stalled task, "full" only windows in which every task was stalled, so
+	// "full" is the stronger signal of a machine that is actually struggling.
+	MemPressureSome = KeyTemplate{"Memory Pressure (some)", "mem.pressure.some"}
+	MemPressureFull = KeyTemplate{"Memory Pressure (full)", "mem.pressure.full"}
+)
+
 // GPU template variables
 var (
 	GPUName          = KeyTemplate{"GPU Name", "name"}

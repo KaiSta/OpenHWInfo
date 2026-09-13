@@ -14,6 +14,7 @@ import (
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
 	"github.com/KaiSta/OpenHWInfo/intel"
 	"github.com/KaiSta/OpenHWInfo/mainboard"
+	"github.com/KaiSta/OpenHWInfo/memory"
 	"github.com/KaiSta/OpenHWInfo/nvidia"
 	"github.com/KaiSta/OpenHWInfo/shared"
 	"github.com/KaiSta/OpenHWInfo/storage"
@@ -59,6 +60,10 @@ type Data struct {
 	// Board is nil when the board reports nothing at all (no SMBIOS and no board
 	// sensors), which the frontend renders as no card.
 	Board *DeviceView
+	// Memory is the machine's RAM and swap as one card. It is nil when
+	// /proc/meminfo cannot be read, which is the only way a Linux system has no
+	// memory to report.
+	Memory *DeviceView
 }
 
 // cpuKeyTemplates assembles the CPU rows in display order: identity fields, one
@@ -206,6 +211,23 @@ func diskKeyTemplates(values map[string]shared.HardwareValue) []shared.KeyTempla
 	return append(templates, labelledBoardTemplates(values, "disk.temp", "disk.tempLabel", "Drive Temperature %d")...)
 }
 
+// memTemplates are the rows of the memory card, in display order: the RAM the
+// machine holds and how much of it is in use, then swap and the kernel's
+// pressure-stall averages. The fixed list is right here because every machine
+// reports the same fields — deviceView drops whichever ones this machine did not
+// fill, so a swapless machine shows no swap rows.
+var memTemplates = []shared.KeyTemplate{
+	shared.MemTotal,
+	shared.MemUsed,
+	shared.MemAvailable,
+	shared.MemUsage,
+	shared.SwapTotal,
+	shared.SwapUsed,
+	shared.SwapUsage,
+	shared.MemPressureSome,
+	shared.MemPressureFull,
+}
+
 // historyStore is a mutex-guarded min/max history for one device family.
 // The poll path is synchronous today, but Wails does not guarantee that
 // GetData is never called concurrently, so a plain map would be a race
@@ -227,10 +249,11 @@ func (h *historyStore) updateAndCalculate(currentValues map[string]shared.Hardwa
 
 // Global stores to track historical values for min/max calculations.
 var (
-	cpuHistory   = newHistoryStore()
-	gpuHistory   = newHistoryStore()
-	diskHistory  = newHistoryStore()
-	boardHistory = newHistoryStore()
+	cpuHistory    = newHistoryStore()
+	gpuHistory    = newHistoryStore()
+	diskHistory   = newHistoryStore()
+	boardHistory  = newHistoryStore()
+	memoryHistory = newHistoryStore()
 )
 
 // App is the main application struct.
@@ -295,6 +318,15 @@ func (a *App) GetData() Data {
 		}
 	}
 
+	// The machine's memory is a single device as well.
+	var memoryView *DeviceView
+	if memoryData := memory.GetInformations(); len(memoryData.Values) > 0 {
+		view := deviceView(memoryData, memTemplates, memoryHistory, "")
+		if len(view.Keys) > 0 {
+			memoryView = &view
+		}
+	}
+
 	// Filter CPU keys to only show those with available values
 	var filteredCpuKeys []shared.KeyTemplate
 	for _, key := range cpuKeyTemplates(cpuData.Values) {
@@ -323,6 +355,7 @@ func (a *App) GetData() Data {
 		CpuMinValues: cpuMinValues,
 		CpuMaxValues: cpuMaxValues,
 		Board:        board,
+		Memory:       memoryView,
 	}
 }
 
