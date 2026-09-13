@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/KaiSta/OpenHWInfo/shared"
@@ -73,7 +74,7 @@ func TestCPUIntelCoretempTemperatures(t *testing.T) {
 		"class/hwmon/hwmon2/temp1_input": "38000",
 	})
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
 	checks := map[string]float64{
 		// coretemp's "Package id 0" IS the CPU temperature and must bind to the
@@ -108,7 +109,7 @@ func TestCPUAMDK10tempTemperatures(t *testing.T) {
 		"class/hwmon/hwmon0/temp3_input": "60000",
 	})
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
 	checks := map[string]float64{
 		"cpu.temp": 65,
@@ -139,7 +140,7 @@ func TestCPUTccdSensorsAreCapped(t *testing.T) {
 	}
 	writeHWMonFixture(t, files)
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
 	for i := 0; i < maxTccdSensors; i++ {
 		if _, ok := temps["tccd"+itoa(i)]; !ok {
@@ -160,7 +161,7 @@ func TestCPUPCHTemperature(t *testing.T) {
 		"class/hwmon/hwmon1/temp1_input": "47000",
 	})
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
 	if got := numeric(t, temps, "cpu.pch"); got != 48 {
 		t.Errorf("cpu.pch = %v; want 48", got)
@@ -170,25 +171,168 @@ func TestCPUPCHTemperature(t *testing.T) {
 	}
 }
 
-// TestCPUTemperaturesFollowSensorNumberOrder pins the ordering: glob returns
-// temp10 before temp2, so without the numeric sort the per-core ordinals would
-// silently swap on a machine with more than nine sensors.
-func TestCPUTemperaturesFollowSensorNumberOrder(t *testing.T) {
+// TestCPUCoreKeysComeFromSensorLabels pins that a core's key is the number its
+// own label carries, which is the numbering /proc/cpuinfo reports as "core id"
+// and therefore the one the frontend pairs a thread with. Keying the sensors by
+// the order they were read is only the same thing while a CPU numbers its cores
+// contiguously from zero: on a chip whose labels read Core 0/2/4 the second
+// sensor was published as core 1, so core 1's tile showed core 2's reading.
+//
+// The fixture also puts the higher sensor number first in the expected order
+// below, which is what the numeric sensor sort exists for.
+func TestCPUCoreKeysComeFromSensorLabels(t *testing.T) {
 	writeHWMonFixture(t, map[string]string{
 		"class/hwmon/hwmon0/name":         "coretemp",
-		"class/hwmon/hwmon0/temp2_label":  "Core 1",
-		"class/hwmon/hwmon0/temp2_input":  "44100",
+		"class/hwmon/hwmon0/temp1_label":  "Package id 0",
+		"class/hwmon/hwmon0/temp1_input":  "45000",
+		"class/hwmon/hwmon0/temp2_label":  "Core 0",
+		"class/hwmon/hwmon0/temp2_input":  "43000",
 		"class/hwmon/hwmon0/temp10_label": "Core 2",
-		"class/hwmon/hwmon0/temp10_input": "45100",
+		"class/hwmon/hwmon0/temp10_input": "49000",
 	})
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
-	if got := numeric(t, temps, "cpu.coreTemp0"); got != 44.1 {
-		t.Errorf("cpu.coreTemp0 = %v; want 44.1 (temp2 must be read before temp10)", got)
+	if got := numeric(t, temps, "cpu.coreTemp0"); got != 43 {
+		t.Errorf("cpu.coreTemp0 = %v; want 43", got)
 	}
-	if got := numeric(t, temps, "cpu.coreTemp1"); got != 45.1 {
-		t.Errorf("cpu.coreTemp1 = %v; want 45.1", got)
+	if got := numeric(t, temps, "cpu.coreTemp2"); got != 49 {
+		t.Errorf("cpu.coreTemp2 = %v; want 49", got)
+	}
+	for _, absent := range []string{"cpu.coreTemp1", "cpu.coreTemp3"} {
+		if _, exists := temps[absent]; exists {
+			t.Errorf("unexpected %s: %v", absent, temps[absent])
+		}
+	}
+}
+
+// TestCPUCoreLabelWithoutNumberYieldsNoRow covers a label that names a core
+// without saying which one: the sensor produces no row, because numbering it by
+// the order it happened to be read would point the UI at another core.
+func TestCPUCoreLabelWithoutNumberYieldsNoRow(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "coretemp",
+		"class/hwmon/hwmon0/temp2_label": "Core",
+		"class/hwmon/hwmon0/temp2_input": "43000",
+		"class/hwmon/hwmon0/temp3_label": "Core 1",
+		"class/hwmon/hwmon0/temp3_input": "44000",
+	})
+
+	temps := cpuTemperatures(1)
+
+	if _, exists := temps["cpu.coreTemp0"]; exists {
+		t.Errorf("expected no row for an unnumbered core label, got %v", temps["cpu.coreTemp0"])
+	}
+	if got := numeric(t, temps, "cpu.coreTemp1"); got != 44 {
+		t.Errorf("cpu.coreTemp1 = %v; want 44", got)
+	}
+}
+
+// TestCPUTemperaturesOmitPerCoreRowsWhenNumberingIsAmbiguous covers the two ways
+// a core number stops identifying one core: a second processor package restarts
+// the numbering at zero, and sensors spread over two chips leave nothing in
+// sysfs to say which chip a number belongs to (a coretemp device is not tied to
+// the package it monitors). The hottest package reading is still reported in
+// both cases, and no per-core row is published — a mislabelled core is worse
+// than an absent one, and the frontend pairs threads with exactly these keys.
+func TestCPUTemperaturesOmitPerCoreRowsWhenNumberingIsAmbiguous(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":        "coretemp",
+		"class/hwmon/hwmon0/temp1_label": "Package id 0",
+		"class/hwmon/hwmon0/temp1_input": "45000",
+		"class/hwmon/hwmon0/temp2_label": "Core 0",
+		"class/hwmon/hwmon0/temp2_input": "43000",
+		"class/hwmon/hwmon0/temp3_label": "Tccd1",
+		"class/hwmon/hwmon0/temp3_input": "41000",
+
+		"class/hwmon/hwmon1/name":        "coretemp",
+		"class/hwmon/hwmon1/temp1_label": "Package id 0",
+		"class/hwmon/hwmon1/temp1_input": "71000",
+		"class/hwmon/hwmon1/temp2_label": "Core 0",
+		"class/hwmon/hwmon1/temp2_input": "69000",
+	})
+
+	assertNoAmbiguousRows := func(t *testing.T, temps map[string]interface{}) {
+		t.Helper()
+		for key := range temps {
+			if strings.HasPrefix(key, "cpu.coreTemp") || strings.HasPrefix(key, "tccd") {
+				t.Errorf("unexpected per-core row %q in %v", key, temps)
+			}
+		}
+	}
+
+	// Two packages: the temperature is the hotter of them, the cooler one must
+	// not win by being read last.
+	t.Run("two packages", func(t *testing.T) {
+		temps := cpuTemperatures(2)
+		if got := numeric(t, temps, "cpu.temp"); got != 71 {
+			t.Errorf("cpu.temp = %v; want 71 (the hottest package)", got)
+		}
+		assertNoAmbiguousRows(t, temps)
+	})
+
+	// One package reported, but the sensors sit on two chips: the same ambiguity,
+	// so the same refusal.
+	t.Run("one package, two chips", func(t *testing.T) {
+		temps := cpuTemperatures(1)
+		if got := numeric(t, temps, "cpu.temp"); got != 71 {
+			t.Errorf("cpu.temp = %v; want 71 (the hottest chip)", got)
+		}
+		assertNoAmbiguousRows(t, temps)
+	})
+}
+
+// TestCPUTccdKeysFollowSensorNumberOrder keeps the numeric sensor sort honest:
+// glob returns temp10 before temp2, so without it the CCD rows would swap on a
+// chip with more than nine sensors.
+func TestCPUTccdKeysFollowSensorNumberOrder(t *testing.T) {
+	writeHWMonFixture(t, map[string]string{
+		"class/hwmon/hwmon0/name":         "k10temp",
+		"class/hwmon/hwmon0/temp1_label":  "Tctl",
+		"class/hwmon/hwmon0/temp1_input":  "65000",
+		"class/hwmon/hwmon0/temp2_label":  "Tccd1",
+		"class/hwmon/hwmon0/temp2_input":  "60000",
+		"class/hwmon/hwmon0/temp10_label": "Tccd2",
+		"class/hwmon/hwmon0/temp10_input": "62000",
+	})
+
+	temps := cpuTemperatures(1)
+
+	if got := numeric(t, temps, "tccd0"); got != 60 {
+		t.Errorf("tccd0 = %v; want 60 (temp2 must be read before temp10)", got)
+	}
+	if got := numeric(t, temps, "tccd1"); got != 62 {
+		t.Errorf("tccd1 = %v; want 62", got)
+	}
+}
+
+func TestCoreNumberFromLabel(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   int
+		wantOK bool
+	}{
+		{"Core 0", 0, true},
+		{"Core 7", 7, true},
+		{"Core 12", 12, true},
+		{" Core 3 ", 3, true},
+		// A label that names no core number must not be turned into one.
+		{"Core", 0, false},
+		{"Core Average", 0, false},
+		{"Package id 0", 0, false},
+		{"Tctl", 0, false},
+		{"Tccd1", 0, false},
+		{"", 0, false},
+	}
+
+	for _, tc := range cases {
+		got, ok := coreNumberFromLabel(tc.in)
+		if ok != tc.wantOK {
+			t.Errorf("coreNumberFromLabel(%q) ok = %v; want %v", tc.in, ok, tc.wantOK)
+		}
+		if ok && got != tc.want {
+			t.Errorf("coreNumberFromLabel(%q) = %d; want %d", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -201,7 +345,7 @@ func TestCPUUnlabelledFirstSensorBindsCPUTemp(t *testing.T) {
 		"class/hwmon/hwmon0/temp1_input": "55000",
 	})
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
 	if got := numeric(t, temps, "cpu.temp"); got != 55 {
 		t.Errorf("cpu.temp = %v; want 55", got)
@@ -219,7 +363,7 @@ func TestCPUUnreadableSensorsAreSkipped(t *testing.T) {
 		"class/hwmon/hwmon0/temp2_input": "",
 	})
 
-	temps := cpuTemperatures()
+	temps := cpuTemperatures(1)
 
 	if len(temps) != 0 {
 		t.Errorf("expected unreadable sensors to produce no rows, got %v", temps)
@@ -233,7 +377,7 @@ func TestCPUNoHwmonChips(t *testing.T) {
 		"class/hwmon/hwmon0/temp2_input": "44000",
 	})
 
-	if temps := cpuTemperatures(); len(temps) != 0 {
+	if temps := cpuTemperatures(1); len(temps) != 0 {
 		t.Errorf("expected a board chip's CPUTIN label not to become the CPU temperature, got %v", temps)
 	}
 }
@@ -343,7 +487,7 @@ func TestParseCpuInfo(t *testing.T) {
 		"cpu MHz\t\t: 3400.000",
 	}
 
-	name, cpus := parseCpuInfo(lines)
+	name, cpus, packages := parseCpuInfo(lines)
 
 	if want := "Intel(R) Core(TM) i7-4770 CPU"; name != want {
 		t.Errorf("name = %q; want %q", name, want)
@@ -356,6 +500,12 @@ func TestParseCpuInfo(t *testing.T) {
 	}
 	if got := cpus["cpu.clock1"]; got != 3400.0 {
 		t.Errorf("cpu.clock1 = %v; want 3400.0", got)
+	}
+	// A file without a "physical id" line cannot say how many packages it
+	// describes, which is the same single-package treatment the topology keys
+	// already get.
+	if packages != 0 {
+		t.Errorf("packages = %d; want 0 when /proc/cpuinfo reports no package id", packages)
 	}
 }
 
@@ -384,7 +534,11 @@ func TestParseCpuInfoMapsThreadsToPhysicalCores(t *testing.T) {
 		"core id\t\t: 1",
 	}
 
-	_, cpus := parseCpuInfo(lines)
+	_, cpus, packages := parseCpuInfo(lines)
+
+	if packages != 1 {
+		t.Errorf("packages = %d; want 1", packages)
+	}
 
 	// "core id" trails "cpu MHz" in each block, so this only works if blocks are
 	// buffered rather than parsed as a single pass.
@@ -408,6 +562,36 @@ func TestParseCpuInfoMapsThreadsToPhysicalCores(t *testing.T) {
 	}
 }
 
+// TestParseCpuInfoMultiplePackagesOmitTopology covers the reason the topology
+// keys are withheld: a second package restarts the core numbering at zero, so
+// "cpu.coreOfN" would name a core of one package or the other. The package count
+// is returned so the temperature mapping can make the same decision about the
+// per-core rows.
+func TestParseCpuInfoMultiplePackagesOmitTopology(t *testing.T) {
+	lines := []string{
+		"processor\t: 0",
+		"cpu MHz\t\t: 2000.000",
+		"physical id\t: 0",
+		"core id\t\t: 0",
+		"processor\t: 1",
+		"cpu MHz\t\t: 2000.100",
+		"physical id\t: 1",
+		"core id\t\t: 0",
+	}
+
+	_, cpus, packages := parseCpuInfo(lines)
+
+	if packages != 2 {
+		t.Errorf("packages = %d; want 2", packages)
+	}
+	if _, exists := cpus["cpu.coreOf0"]; exists {
+		t.Errorf("expected no core mapping on a two-package machine, got %v", cpus["cpu.coreOf0"])
+	}
+	if got := cpus["cpu.clock1"]; got != 2000.100 {
+		t.Errorf("cpu.clock1 = %#v; want 2000.1", got)
+	}
+}
+
 // TestParseCpuInfoWithoutCoreIDOmitsTopology verifies the topology keys are
 // simply absent when /proc/cpuinfo does not report "core id" (e.g. ARM), rather
 // than defaulting to a guess.
@@ -419,7 +603,7 @@ func TestParseCpuInfoWithoutCoreIDOmitsTopology(t *testing.T) {
 		"cpu MHz\t\t: 1200.000",
 	}
 
-	_, cpus := parseCpuInfo(lines)
+	_, cpus, _ := parseCpuInfo(lines)
 
 	if _, exists := cpus["cpu.coreOf0"]; exists {
 		t.Errorf("expected no core mapping when core id is unavailable")
@@ -437,7 +621,7 @@ func TestParseCpuInfoUnparsableClockKeepsString(t *testing.T) {
 		"cpu MHz\t\t: N/A",
 	}
 
-	_, cpus := parseCpuInfo(lines)
+	_, cpus, _ := parseCpuInfo(lines)
 
 	got, ok := cpus["cpu.clock0"]
 	if !ok {
@@ -458,10 +642,13 @@ func TestParseCpuInfoMalformedDoesNotPanic(t *testing.T) {
 		"",
 	}
 
-	name, cpus := parseCpuInfo(lines)
+	name, cpus, packages := parseCpuInfo(lines)
 
 	if name != "" {
 		t.Errorf("name = %q; want empty", name)
+	}
+	if packages != 0 {
+		t.Errorf("packages = %d; want 0", packages)
 	}
 	if len(cpus) != 3 {
 		// Only the vendor/brand/model placeholders are populated.

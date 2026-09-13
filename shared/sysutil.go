@@ -67,12 +67,18 @@ func ParseFrequencyMHz(value string) float64 {
 }
 
 // ParsePower converts a raw sysfs power value to watts. Sysfs reports power in
-// microwatts, so callers normally pass divisor 1000000. Negative or unparsable
+// microwatts, so callers normally pass divisor 1000000. The division is done in
+// floating point: an integer division would truncate towards zero, so a card
+// drawing 149.9 W would read 149 W and one idling at 0.9 W would read 0 —
+// indistinguishable from a sensor that reported nothing. Negative or unparsable
 // values yield 0.
 func ParsePower(raw string, divisor int) float64 {
 	val, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || val < 0 {
 		return 0
 	}
-	return float64(val / divisor)
+	if divisor == 0 {
+		return 0
+	}
+	return float64(val) / float64(divisor)
 }

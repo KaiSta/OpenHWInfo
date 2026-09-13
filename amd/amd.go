@@ -244,8 +244,10 @@ func GetAllInformations() []shared.HardwareData {
 }
 
 // parseTemperatureValue records a millidegree-Celsius hwmon sensor as degrees
-// Celsius. The sensor is skipped entirely when its file is absent, so that
-// boards without a given sensor do not report a bogus 0 C reading.
+// Celsius, keeping the fraction: the division is done in floating point so a
+// 45.5 C sensor does not read as 45. The sensor is skipped entirely when its
+// file is absent, so that boards without a given sensor do not report a bogus
+// 0 C reading.
 func parseTemperatureValue(data *map[string]shared.HardwareValue, hwmonPath string, fileName string, dataKey ...string) {
 	raw, ok := shared.ReadSysFile(filepath.Join(hwmonPath, fileName))
 	if !ok {
@@ -259,11 +261,12 @@ func parseTemperatureValue(data *map[string]shared.HardwareValue, hwmonPath stri
 	if len(dataKey) > 0 {
 		key = dataKey[0]
 	}
-	(*data)[key] = shared.NewHardwareValue(float64(val/1000), shared.Celsius, shared.Temperature)
+	(*data)[key] = shared.NewHardwareValue(float64(val)/1000, shared.Celsius, shared.Temperature)
 }
 
 // parseMemoryValue converts a sysfs byte count to megabytes, returning 0 when
-// the file is absent or unparsable.
+// the file is absent or unparsable. The byte count is converted to float before
+// the division, which keeps the fraction instead of truncating towards zero.
 func parseMemoryValue(path string) float64 {
 	raw, ok := shared.ReadSysFile(path)
 	if !ok {
@@ -273,7 +276,7 @@ func parseMemoryValue(path string) float64 {
 	if err != nil {
 		return 0
 	}
-	return float64(val / 1024 / 1024) // Convert bytes to MB
+	return float64(val) / (1024 * 1024)
 }
 
 func parseGPUUsage(value string) float64 {

@@ -42,13 +42,13 @@ func TestGetInformationsWithAMDCard(t *testing.T) {
 
 	// Write mock sysfs files with realistic values
 	files := map[string]string{
-		filepath.Join(hwmonDir, "temp1_input"):           "45000",      // 45 C
+		filepath.Join(hwmonDir, "temp1_input"):           "45500",      // 45.5 C
 		filepath.Join(hwmonDir, "temp2_input"):           "55000",      // 55 C
 		filepath.Join(hwmonDir, "temp3_input"):           "65000",      // 65 C
 		filepath.Join(hwmonDir, "freq1_input"):           "1200000000", // 1200 MHz (1.2 GHz in Hz)
 		filepath.Join(hwmonDir, "freq2_input"):           "1000000000", // 1000 MHz (1.0 GHz in Hz)
 		filepath.Join(hwmonDir, "power1_cap_max"):        "250000000",  // 250 W with divisor 1000000
-		filepath.Join(hwmonDir, "power1_average"):        "150000000",  // 150 W with divisor 1000000
+		filepath.Join(hwmonDir, "power1_average"):        "149500000",  // 149.5 W with divisor 1000000
 		filepath.Join(hwmonDir, "fan1_input"):            "1500",       // 1500 RPM
 		filepath.Join(deviceDir, "mem_info_vram_total"):  "8589934592", // 8192 MB
 		filepath.Join(deviceDir, "mem_info_vram_used"):   "2147483648", // 2048 MB
@@ -108,6 +108,62 @@ func TestGetInformationsWithAMDCard(t *testing.T) {
 		if usageNum < 0 {
 			t.Errorf("expected GPU usage to be >= 0, got %f (could be -1 on failure)", usageNum)
 		}
+	}
+
+	// 3. Fractional readings must survive the conversion. Both of these were
+	// truncated towards zero by an integer division before the float conversion:
+	// the sensor above reads 45.5 C and the card draws 149.5 W.
+	assertNumeric(t, info, shared.GPUTemp.Key, 45.5)
+	assertNumeric(t, info, shared.GPUPowerAvg.Key, 149.5)
+}
+
+// assertNumeric fails when a key is absent or does not carry want.
+func assertNumeric(t *testing.T, info shared.HardwareData, key string, want float64) {
+	t.Helper()
+	value, ok := info.Values[key]
+	if !ok {
+		t.Fatalf("expected %s to be present in hardware values", key)
+	}
+	got, err := value.GetNumericValue()
+	if err != nil {
+		t.Fatalf("failed to get numeric value for %s: %v", key, err)
+	}
+	if got != want {
+		t.Errorf("%s = %v; want %v", key, got, want)
+	}
+}
+
+// TestParseTemperatureValueKeepsFraction pins the conversion itself, so the
+// end-to-end assertion above cannot pass by way of some other path.
+func TestParseTemperatureValueKeepsFraction(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "temp1_input"), []byte("45500"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	data := map[string]shared.HardwareValue{}
+	parseTemperatureValue(&data, dir, "temp1_input")
+
+	if got := data[shared.GPUTemp.Key].Value; got != 45.5 {
+		t.Errorf("temperature = %v; want 45.5", got)
+	}
+}
+
+// TestParseMemoryValueKeepsFraction covers a byte count that is not a whole
+// number of megabytes, which an integer division rounded down (and a count below
+// one megabyte collapsed to zero).
+func TestParseMemoryValueKeepsFraction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mem_info_vram_total")
+	if err := os.WriteFile(path, []byte("1000000"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := parseMemoryValue(path); got != 1000000.0/(1024*1024) {
+		t.Errorf("parseMemoryValue = %v; want %v", got, 1000000.0/(1024*1024))
+	}
+	if got := parseMemoryValue(filepath.Join(dir, "absent")); got != 0 {
+		t.Errorf("parseMemoryValue of an absent file = %v; want 0", got)
 	}
 }
 

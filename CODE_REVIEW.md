@@ -8,9 +8,12 @@ and the frontend calls the bound `App.GetData` method directly.
 
 - **Entry point:** `main.go` — builds the Wails options, embeds the frontend with
   `//go:embed all:website`, and exposes `GetData()` to JavaScript.
-- **Frontend:** `website/index.html` — a single self-contained page, rendered from
-  the `Data` struct returned by `GetData`. Polls every 5 seconds via
+- **Frontend:** `website/index.html` — a shell whose renderer lives in
+  `website/app.js` and `website/styles.css`. It is rendered from the `Data` struct
+  returned by `GetData` and polls every 5 seconds via
   `window.go.main.App.GetData()`.
+  (An earlier revision of this document called it a single self-contained page,
+  which stopped being true when the renderer was split out of the HTML.)
 - **Collectors:** one package per vendor.
   - `cpuinfo` — `/proc/cpuinfo` plus the processor's own hwmon chips
     (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`, PCH).
@@ -99,7 +102,9 @@ The following were fixed and are now covered by tests.
    reading per physical core, and these were stored under label-derived keys
    (`cpu.Core N`) that no template referenced — the same failure mode as the
    missing CPU temperature above. They now use canonical `cpu.coreTempN` keys,
-   are generated into templates, and render in the per-core grid.
+   are generated into templates, and render in the per-core grid. (Which core a
+   key names was still wrong at that point — the number is taken from the
+   sensor's own label as of item 32.)
 
    SMT means there are more threads than physical cores (this host: 8 threads, 4
    sensors), so a thread cannot simply be given the sensor of the same number.
@@ -412,6 +417,52 @@ The following were fixed and are now covered by tests.
     (`refreshSmartEntry`), so the two schedules are tested against a fixed clock
     instead of by waiting on a real drive.
 
+32. **Per-core temperatures were keyed by the order the sensors were read, not by
+    the core their label names.** `cpuTemperatures` published the nth `coretemp`
+    sensor whose label began with `Core` as `cpu.coreTemp<n>`, while the frontend
+    pairs a thread with `cpu.coreTempN` through the `core id` `/proc/cpuinfo`
+    reports — so the two agreed only while a CPU numbered its cores contiguously
+    from zero, which is why the review host (four cores, `Core 0`–`Core 3`) looked
+    correct. A probe with sensors labelled `Core 0`/`Core 2`/`Core 4` showed the
+    failure: they were published as `coreTemp0`/`coreTemp1`/`coreTemp2`, so a
+    thread on core 2 was displayed the reading of **core 4** — a core's heat
+    attributed to a different core, the one thing the paired/index/block layout
+    was built to prevent. A second package makes the same number name two cores
+    (its numbering restarts at 0, and nothing in sysfs ties a coretemp device to
+    the package it monitors), and the probe showed the second package's keys
+    (`coreTemp4`…`coreTemp7`) referenced by no thread at all while every thread
+    of both packages resolved into the first package's four keys.
+
+    The key now comes from the sensor's own label (`Core 7` → `cpu.coreTemp7`),
+    which is exactly the numbering `core id` uses; a label carrying no number
+    produces no row, because a positionally invented one would point at another
+    core. When a core number cannot identify one core — more than one processor
+    package in `/proc/cpuinfo`, or more than one CPU hwmon chip — the per-core and
+    per-CCD rows are not produced at all: `cpuTemperatures` refuses to publish
+    them, the frontend finds no `cpu.coreOfN` keys to pair with and shows the
+    package reading alone. `parseCpuInfo` gained the package count (and keeps the
+    `cpu.coreOfN` keys buffered until the whole file has been read, since a second
+    package is only visible at the end), and `cpu.temp` is now the **hottest**
+    package's reading so a busy second socket cannot be hidden by a cool first
+    one. Tests cover the non-contiguous labels, a label without a number, both
+    ambiguity cases and the CCD ordering the numeric sensor sort exists for.
+
+33. **Four unit conversions divided in integer arithmetic before converting to
+    float**, truncating every reading they touched towards zero:
+    `amd.parseTemperatureValue` (`float64(val/1000)`), `intel.addTemperature`
+    (the same), `amd.parseMemoryValue` (`float64(val / 1024 / 1024)`) and
+    `shared.ParsePower` (`float64(val / divisor)`). A 45.5 °C sensor read as
+    45 °C, a card drawing 149.9 W as 149 W, and the worst case was the one this
+    codebase otherwise guards against deliberately: 0.9 W became `0.00 W`, which
+    is indistinguishable from a sensor that reported nothing. The min/max history
+    recorded the truncated figures too. All four now divide in floating point,
+    `ParsePower` additionally returns 0 for a zero divisor instead of panicking on
+    the integer division, and the fixtures that used whole watts and whole degrees
+    were replaced with fractional ones so the truncation cannot return unnoticed:
+    the AMD and Intel card tests assert 45.5 °C / 149.5 W and 42.5 °C / 179.5 W,
+    and `ParsePower` covers a fractional wattage, a sub-watt reading and a zero
+    divisor.
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
@@ -429,7 +480,7 @@ The following were fixed and are now covered by tests.
 
 | Package    | Coverage |
 |------------|----------|
-| `cpuinfo`  | `/proc/cpuinfo` parsing, hwmon temperature mapping (Intel coretemp incl. the `Package`→`cpu.temp` mapping and sensor-number ordering, AMD k10temp `Tctl`/`TccdN` with the CCD cap, PCH, label-less drivers, other components' chips ignored, millidegree conversion, unreadable sensors producing no row) |
+| `cpuinfo`  | `/proc/cpuinfo` parsing (clocks, `core id` topology, the package count and the topology keys withheld on a two-package machine), hwmon temperature mapping (Intel coretemp incl. the `Package`→`cpu.temp` mapping, cores keyed by their own label number, an unnumbered label producing no row, the per-core rows withheld when a core number is ambiguous, sensor-number ordering for the CCD rows, AMD k10temp `Tctl`/`TccdN` with the CCD cap, PCH, label-less drivers, other components' chips ignored, millidegree conversion, unreadable sensors producing no row) |
 | `nvidia`   | CSV field parsing, unit stripping, `[N/A]` handling, multi-row output splitting, column-to-metric contract driven through the real parser, name-with-comma alignment, truncated rows |
 | `amd`      | sysfs-mocked single/multi-card collection, GPU name cleaning and disambiguation |
 | `intel`    | sysfs-mocked single/multi-card collection with an exact name assertion, PCI ID mapping (Arc incl. Battlemage, integrated GPUs must not be named Arc, non-GPU IDs resolve to nothing), table integrity rules, name cleaning, rejection of identifier-only input, and a fallback that always yields a usable name |
@@ -557,11 +608,16 @@ These are known limitations rather than defects, listed roughly by value.
    they cannot be embedded by `//go:embed all:website`) plus a headless runner
    would turn those checks into regressions.
 
-11. **Per-core topology assumes `coretemp`'s `Core N` matches `/proc/cpuinfo`'s
-   `core id N`.** This holds on the hosts checked, and it is the usual
-   convention, but the mapping is inferred rather than read from a single source.
-   If a kernel numbered them differently, a tile would show a sibling core's
-   temperature rather than none.
+11. **A multi-package machine reports only its hottest package temperature.**
+   Core numbers restart per package and sysfs does not say which coretemp chip
+   monitors which package, so item 32 withholds the per-core rows rather than
+   publish numbers that name two cores. The package reading survives, but a
+   dual-socket machine therefore loses its per-core temperatures entirely. Doing
+   better needs either a documented link from an hwmon device to its package or
+   package-qualified keys plus a frontend that renders them; neither is
+   verifiable on the single-socket review host, whose four cores are numbered
+   contiguously (`Core 0`–`Core 3`, matching `core id 0`–`3`), so the live
+   attribution check passes there.
 
 12. **The mainboard card has never run against a Super I/O chip.** The review
    host is a laptop whose hwmon devices are `acpitz`, `coretemp`, `iwlwifi`,

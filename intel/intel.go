@@ -312,12 +312,15 @@ func GetAllInformations() []shared.HardwareData {
 
 // addTemperature records a millidegree-Celsius i915 hwmon sensor as degrees
 // Celsius, skipping the metric entirely when the sensor file is absent.
+// addTemperature records a millidegree-Celsius hwmon sensor as degrees Celsius,
+// dividing in floating point so the fraction survives: 42.5 C must not read as
+// 42, and a reading just under a whole degree must not round down to it.
 func addTemperature(data *map[string]shared.HardwareValue, hwmonPath string, fileName string, key string) {
 	raw, ok := shared.ReadSysFile(filepath.Join(hwmonPath, fileName))
 	if !ok {
 		return
 	}
 	if val, err := strconv.Atoi(raw); err == nil {
-		(*data)[key] = shared.NewHardwareValue(float64(val/1000), shared.Celsius, shared.Temperature)
+		(*data)[key] = shared.NewHardwareValue(float64(val)/1000, shared.Celsius, shared.Temperature)
 	}
 }

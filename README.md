@@ -58,6 +58,21 @@ no labels at all (older `k10temp`, ARM's `cpu_thermal`) is read as a single
 package reading, and a chip whose readings cannot be parsed produces no row
 rather than a zero.
 
+A core's row is keyed by the number in its **own** label (`Core 7` →
+`cpu.coreTemp7`), which is the same numbering `/proc/cpuinfo` reports as
+`core id` and therefore the one a thread's temperature is looked up with. The
+tile for a thread shows its core's reading, so on an SMT CPU both threads of a
+core display that core's temperature. A label that names no number produces no
+row rather than an invented one.
+
+When a core number cannot identify a single core, per-core rows are left out
+entirely and only the package temperature is shown: that happens on a machine
+with more than one processor package (each package numbers its cores from 0
+again, and sysfs does not say which `coretemp` chip monitors which package) and
+on a machine whose processor sensors are spread over more than one chip. The
+package figure is then the **hottest** package's reading. A mislabelled core
+would be worse than an absent row, so nothing is guessed.
+
 ## Mainboard infos
 
 DMI (`/sys/class/dmi/id`, i.e. the SMBIOS strings the firmware publishes)

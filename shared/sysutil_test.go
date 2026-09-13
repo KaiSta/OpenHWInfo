@@ -38,6 +38,13 @@ func TestParsePower(t *testing.T) {
 		{"microwatts", "150000000", 1000000, 150},
 		{"padded", " 250000000 ", 1000000, 250},
 		{"zero", "0", 1000000, 0},
+		// The division is floating point, so a fractional wattage survives: an
+		// integer division reported 15500000 as 15 W and 900000 as 0 W, the
+		// latter indistinguishable from a sensor that reported nothing.
+		{"fractional microwatts", "15500000", 1000000, 15.5},
+		{"sub-watt", "900000", 1000000, 0.9},
+		// A zero divisor used to panic on the integer division.
+		{"zero divisor", "150000000", 0, 0},
 		// A negative power reading (e.g. a sensor mid-reset) must not surface as
 		// a negative wattage in the UI.
 		{"negative", "-1000", 1000000, 0},

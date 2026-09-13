@@ -38,10 +38,10 @@ func TestGetInformationsWithIntelCard(t *testing.T) {
 	files := map[string]string{
 		filepath.Join(cardDevicePath, "vendor"):       "0x8086",     // Intel PCI vendor ID
 		filepath.Join(cardDevicePath, "device"):       "0x3E9B",     // Coffee Lake UHD Graphics 630
-		filepath.Join(hwmonDir, "temp1_input"):        "42000",      // 42 C
+		filepath.Join(hwmonDir, "temp1_input"):        "42500",      // 42.5 C
 		filepath.Join(hwmonDir, "temp2_input"):        "51000",      // 51 C
 		filepath.Join(hwmonDir, "freq0_input"):        "1350000000", // 1350 MHz (1.35 GHz in Hz)
-		filepath.Join(hwmonDir, "power1_average"):     "180000000",  // 180 W with divisor 1000000
+		filepath.Join(hwmonDir, "power1_average"):     "179500000",  // 179.5 W with divisor 1000000
 		filepath.Join(tempDir, "module/i915/version"): "6.8.0-45-generic",
 	}
 
@@ -83,8 +83,10 @@ func TestGetInformationsWithIntelCard(t *testing.T) {
 		if err != nil {
 			t.Errorf("failed to get numeric value for GPU temperature: %v", err)
 		}
-		if tempNum != 42 {
-			t.Errorf("expected GPU temperature to be 42, got %f", tempNum)
+		// 42.5, not 42: the millidegree conversion is done in floating point, so
+		// the fraction survives an integer division that used to drop it.
+		if tempNum != 42.5 {
+			t.Errorf("expected GPU temperature to be 42.5, got %f", tempNum)
 		}
 	}
 
@@ -111,8 +113,8 @@ func TestGetInformationsWithIntelCard(t *testing.T) {
 		if err != nil {
 			t.Errorf("failed to get numeric value for GPU power: %v", err)
 		}
-		if powerNum != 180 {
-			t.Errorf("expected GPU power to be 180 W, got %f", powerNum)
+		if powerNum != 179.5 {
+			t.Errorf("expected GPU power to be 179.5 W, got %f", powerNum)
 		}
 	}
 
