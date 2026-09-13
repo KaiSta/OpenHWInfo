@@ -425,6 +425,47 @@ func TestIntelGraphicsModelsIntegrity(t *testing.T) {
 	}
 }
 
+// TestDriverVersionIsCachedPerSysfsRoot documents the memoization: the driver
+// version is read once per sysfs root, not on every poll, and a fixture that is
+// rewritten in place only takes effect after the cache is dropped. Both halves
+// matter — caching without the sysfs root in the key would leak one fixture
+// tree's version into another's.
+func TestDriverVersionIsCachedPerSysfsRoot(t *testing.T) {
+	tempDir := t.TempDir()
+
+	originalSysDir := sysDir
+	sysDir = tempDir
+	defer func() {
+		sysDir = originalSysDir
+	}()
+	shared.ResetProbeCache()
+	defer shared.ResetProbeCache()
+
+	versionPath := filepath.Join(tempDir, "module/i915/version")
+	if err := os.MkdirAll(filepath.Dir(versionPath), 0755); err != nil {
+		t.Fatalf("failed to create module directory: %v", err)
+	}
+	if err := os.WriteFile(versionPath, []byte("6.8.0-45-generic"), 0644); err != nil {
+		t.Fatalf("failed to write version file: %v", err)
+	}
+
+	if got := getDriverVersion(); got != "6.8.0-45-generic" {
+		t.Fatalf("getDriverVersion = %q; want %q", got, "6.8.0-45-generic")
+	}
+
+	if err := os.WriteFile(versionPath, []byte("6.9.0-12-generic"), 0644); err != nil {
+		t.Fatalf("failed to rewrite version file: %v", err)
+	}
+	if got := getDriverVersion(); got != "6.8.0-45-generic" {
+		t.Errorf("getDriverVersion = %q after a rewrite; want the cached %q", got, "6.8.0-45-generic")
+	}
+
+	shared.ResetProbeCache()
+	if got := getDriverVersion(); got != "6.9.0-12-generic" {
+		t.Errorf("getDriverVersion = %q after dropping the cache; want %q", got, "6.9.0-12-generic")
+	}
+}
+
 // TestIntelCodenameOnlyModelsIntegrity checks the hand-maintained map that
 // covers parts pci.ids describes only by codename.
 func TestIntelCodenameOnlyModelsIntegrity(t *testing.T) {

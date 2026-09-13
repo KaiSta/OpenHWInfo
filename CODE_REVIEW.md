@@ -493,13 +493,14 @@ These are known limitations rather than defects, listed roughly by value.
    model of `Core(TM) i7-4770 CPU`. Note that `GetInformations` overwrites
    `cpu.model` with the full name anyway.
 
-3. **The device scan still runs on every poll.** `GetAllInformations()` probes
-   once per tick (one `nvidia-smi` call), which is correct
-   but not free, and the device set is stable for the lifetime of the process —
-   a device appearing later is the only case a cache would miss. Caching the
-   probes with a short TTL (or checking for new cards on a slower cadence) would
-   remove the remaining forks; on the review host one `nvidia-smi` query costs
-   ~15 ms, so the win is modest but real.
+3. **The device scan still runs on every poll.** AMD/Intel identity (the GPU name
+   and the driver version) is now memoized in `shared.CachedProbe`, keyed by the
+   sysfs root and the card identity, so `lspci`/`glxinfo`/`modinfo` run once per
+   card per process. What remains is the per-tick `nvidia-smi` query, which is
+   not an identity probe: it is the source of the live metrics themselves. The
+   device *set* is still rescanned each tick, and a card appearing later takes a
+   fresh cache key, so hotplug works. On the review host one `nvidia-smi` query
+   costs ~15 ms; the win from removing it would be modest but real.
 
 4. **Thresholds are still key-string based.** `temperatureLimit()` and `gauge()`
    match on key substrings and the tables are hardcoded in the frontend, so a

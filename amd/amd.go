@@ -37,10 +37,20 @@ func probeAMD() ([]int, error) {
 
 // getGPUName returns a human-readable chipset/product label for the card at the
 // given DRM index, preferring a PCI-address-scoped lspci query so that multi-GPU
-// systems get the correct name per card. The raw lspci line is reduced to just
-// the device portion (see cleanGPUName).
+// systems get the correct name per card. The name is fixed for the lifetime of
+// the app, so it is resolved once per card rather than forking lspci on every
+// poll; the cache key carries the sysfs root and the card identity so two cards
+// — and two tests' fixture trees — never share one name.
 func getGPUName(cardIndex int) string {
-	if pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex); pciAddr != "" {
+	pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex)
+	key := "amd.gpuName|" + sysDir + "|" + strconv.Itoa(cardIndex) + "|" + pciAddr
+	return shared.CachedProbe(key, func() string { return resolveAMDGPUName(pciAddr, cardIndex) })
+}
+
+// resolveAMDGPUName runs the actual naming queries. The raw lspci line is
+// reduced to just the device portion (see cleanGPUName).
+func resolveAMDGPUName(pciAddr string, cardIndex int) string {
+	if pciAddr != "" {
 		if line := strings.TrimSpace(shared.RunCommand("lspci", "-s", pciAddr)); line != "" {
 			return cleanGPUName(line)
 		}

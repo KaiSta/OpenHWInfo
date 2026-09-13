@@ -42,13 +42,23 @@ func getPCIDeviceID(cardIndex int) string {
 }
 
 // getGPUName returns a human readable name for the Intel GPU at the given DRM
-// index. The PCI device ID from sysfs identifies the model exactly, so that is
-// tried first; multi-GPU systems are handled because the ID is per card. Falls
-// back to glxinfo, which provides renderer strings like "Intel(R) UHD Graphics
-// 770", then to a PCI-scoped lspci query that does carry a product name.
+// index. The name is fixed for the lifetime of the app, so it is resolved once
+// per card rather than re-running lspci or glxinfo on every poll; the cache key
+// carries the sysfs root and the card identity so two cards — and two tests'
+// fixture trees — never share one name.
 func getGPUName(cardIndex int) string {
 	deviceID := getPCIDeviceID(cardIndex)
+	pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex)
+	key := "intel.gpuName|" + sysDir + "|" + strconv.Itoa(cardIndex) + "|" + deviceID + "|" + pciAddr
+	return shared.CachedProbe(key, func() string { return resolveIntelGPUName(deviceID, pciAddr) })
+}
 
+// resolveIntelGPUName runs the actual naming methods. The PCI device ID from
+// sysfs identifies the model exactly, so that is tried first; multi-GPU systems
+// are handled because the ID is per card. Falls back to glxinfo, which provides
+// renderer strings like "Intel(R) UHD Graphics 770", then to a PCI-scoped lspci
+// query that does carry a product name.
+func resolveIntelGPUName(deviceID, pciAddr string) string {
 	// Method 1: PCI device ID -> marketing name. This is the only method that
 	// names the exact model, and it needs no external command.
 	if model := getIntelDeviceModel(deviceID); model != "" {
@@ -59,7 +69,7 @@ func getGPUName(cardIndex int) string {
 	// the numeric form carries no product name ("00:02.0 0300: 8086:0416"),
 	// while the named form gives "Intel Corporation 4th Gen Core Processor
 	// Integrated Graphics Controller" using the pci.ids database.
-	if pciAddr := shared.ResolvePCIDevice(sysDir, cardIndex); pciAddr != "" {
+	if pciAddr != "" {
 		line := strings.TrimSpace(shared.RunCommand("lspci", "-s", pciAddr))
 		if line != "" {
 			if name := parseIntelGPUName(line, deviceID); name != "" {
@@ -213,8 +223,14 @@ func cleanPCIDeviceName(name string) string {
 }
 
 // getDriverVersion returns the i915 driver version (the kernel version the
-// driver was built with), read from sysfs with a modinfo fallback.
+// driver was built with), read from sysfs with a modinfo fallback. Like the GPU
+// name it is fixed for the process lifetime, so the modinfo fork is paid at most
+// once.
 func getDriverVersion() string {
+	return shared.CachedProbe("intel.driverVersion|"+sysDir, resolveIntelDriverVersion)
+}
+
+func resolveIntelDriverVersion() string {
 	if version, ok := shared.ReadSysFile(filepath.Join(sysDir, "module/i915/version")); ok && version != "" {
 		return version
 	}

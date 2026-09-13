@@ -112,7 +112,7 @@ https://developer.download.nvidia.com/compute/DCGM/docs/nvidia-smi-367.38.pdf
 
 `lspci` + `/sys/class/drm/cardN/device` (PCI vendor ID `0x1002`) + hwmon
 
-* Name (PCI-address-scoped `lspci` query, disambiguated when several identical cards are present)
+* Name (PCI-address-scoped `lspci` query, disambiguated when several identical cards are present). A card's name cannot change while the app runs, so it is resolved once instead of forking `lspci` on every poll.
 * Temperature, hotspot/junction temperature where available (`temp1_input` / `temp2_input` / `temp3_input`)
 * VRAM used/total/vendor (`mem_info_vram_*`)
 * GPU clock (`freq1_input` / `freq2_input`)
@@ -130,7 +130,7 @@ DRM sysfs `/sys/class/drm/cardN/device` (PCI vendor ID `0x8086`) + hwmon
   integrated Arc Graphics (`0x7D55`) are covered, as are the integrated
   generations from Sandy Bridge onward. If the ID is unknown the name comes from
   a PCI-address-scoped `lspci` query, then `glxinfo`, then `Intel Graphics`.
-* Driver version (`/sys/module/i915/version`)
+* Driver version (`/sys/module/i915/version`, with a `modinfo` fallback). Read once per process, like the GPU name.
 * Temperature (`temp1_input`), hotspot temp if available (`temp2_input`)
 * GPU clock (`freq0_input` / `freq1_input`)
 * Average power draw (`power1_average`)
