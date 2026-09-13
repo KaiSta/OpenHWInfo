@@ -1,7 +1,6 @@
 package shared
 
 import (
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +14,7 @@ import (
 func RunShell(command string) string {
 	output, err := exec.Command("sh", "-c", command).Output()
 	if err != nil {
-		log.Printf("Error executing command %q: %v\n", command, err)
+		Debugf("Error executing command %q: %v", command, err)
 		return ""
 	}
 	return strings.TrimSpace(string(output))
@@ -27,7 +26,7 @@ func RunShell(command string) string {
 func RunCommand(name string, args ...string) string {
 	output, err := exec.Command(name, args...).Output()
 	if err != nil {
-		log.Printf("Error executing %s %v: %v\n", name, args, err)
+		Debugf("Error executing %s %v: %v", name, args, err)
 		return ""
 	}
 	return strings.TrimSpace(string(output))
@@ -61,7 +60,7 @@ func ReadSysFile(path string) (string, bool) {
 func ParseFrequencyMHz(value string) float64 {
 	freq, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
 	if err != nil {
-		log.Printf("Error parsing frequency value %q: %v\n", value, err)
+		Debugf("Error parsing frequency value %q: %v", value, err)
 		return 0
 	}
 	return freq / 1e6

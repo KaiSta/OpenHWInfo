@@ -49,7 +49,7 @@ func queryGPUs() [][]string {
 	query := strings.Join(gpuQueryFields, ",")
 	output := shared.RunCommand("nvidia-smi", "--query-gpu="+query, "--format=csv,noheader")
 	if strings.TrimSpace(output) == "" {
-		log.Println("No output from nvidia-smi --query-gpu (driver installed?)")
+		shared.Debugf("No output from nvidia-smi --query-gpu (driver installed?)")
 		return nil
 	}
 	return parseGPUOutput(output)
@@ -160,7 +160,7 @@ func GetAllInformations() []shared.HardwareData {
 	if len(rows) == 0 {
 		return nil
 	}
-	log.Printf("nvidia-smi reported %d GPU(s)\n", len(rows))
+	shared.Debugf("nvidia-smi reported %d GPU(s)", len(rows))
 
 	var result []shared.HardwareData
 	for rowIndex, fields := range rows {

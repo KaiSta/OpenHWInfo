@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"flag"
 	"fmt"
 	"sort"
 	"strconv"
@@ -468,6 +469,13 @@ func withUnits(texts map[string]string, values map[string]shared.HardwareValue) 
 }
 
 func main() {
+	// The collectors' per-poll tracing is off unless asked for: normal runs should
+	// print nothing but a window, so that a genuine warning is visible when it
+	// appears.
+	debug := flag.Bool("debug", false, "log per-poll collector tracing")
+	flag.Parse()
+	shared.SetDebug(*debug)
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{

@@ -17,6 +17,8 @@ make package    # build a .deb installer into dist/ (also: make install)
 make clean      # remove binary and dist/
 ```
 
+`./OpenHWInfo -debug` additionally logs what each collector found on every poll — the DRM cards, drives and sensor chips, and why a device was skipped. Normal runs print nothing, so a genuine warning is visible when it appears.
+
 The `production` tag is required for Wails to create the native window; `webkit2_41` selects WebKitGTK 4.1 (use `libwebkit2gtk-4.0-dev` and drop this tag on older distros). The frontend in `website/` is embedded into the binary, so a single self-contained executable is produced.
 
 > **Note:** Running `go build .` without tags will fail with "Wails applications will not build without the correct build tags." Always use `make build` or add `-tags=production,webkit2_41`.

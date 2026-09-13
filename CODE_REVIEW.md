@@ -23,8 +23,9 @@ and the frontend calls the bound `App.GetData` method directly.
     drive's own hwmon chip (`nvme`, `drivetemp`) for temperature, and
     `/proc/mounts` plus `statfs` for how full its filesystems are.
 - **`shared`** — `HardwareValue`/`HardwareData` types, key templates, the
-  sysfs/shell helpers used by the vendor packages, and the DRM card scan
-  (`ProbeDRMCards`, `DRMCardDevicePath`, `ResolvePCIDevice`).
+  sysfs/shell helpers used by the vendor packages, the DRM card scan
+  (`ProbeDRMCards`, `DRMCardDevicePath`, `ResolvePCIDevice`), the identity-probe
+  memo cache (`CachedProbe`) and the `-debug` logging gate (`Debugf`).
 
 Each GPU vendor package exposes a single collection entry point,
 `GetAllInformations()`, which returns `nil` when the vendor is unavailable and
@@ -432,7 +433,7 @@ The following were fixed and are now covered by tests.
 | `intel`    | sysfs-mocked single/multi-card collection with an exact name assertion, PCI ID mapping (Arc incl. Battlemage, integrated GPUs must not be named Arc, non-GPU IDs resolve to nothing), table integrity rules, name cleaning, rejection of identifier-only input, and a fallback that always yields a usable name |
 | `mainboard`| sysfs-mocked DMI identity (including a blank/root-only field producing no row), board-zone selection and millidegree conversion, Super I/O temperatures and fans with and without driver labels, chip-name allowlist, sensor caps, unparsable readings |
 | `storage`  | sysfs-mocked drive listing (SATA SSD, NVMe, HDD, and the virtual/optical devices that must not appear), medium and capacity from the rotational flag and sector count, NVMe labels vs a drivetemp chip, rejection of a non-drive hwmon chip, partition-to-disk mapping with a mount-table fixture and a stubbed `statfs` (aggregation, duplicate mounts, an unmappable `dm-0`, an escaped space, a failing lookup, a missing mount table); SMART: every health rule as its own case (a healthy drive with exactly one reading broken), Kelvin and wire-type decoding for both interfaces, the life-attribute allowlist and its threshold scaling, the fabrication guards (absent bad-sector count, never-read drive, empty NVMe dictionary), every row's presence *and* unit, and the row→template contract |
-| `shared`   | frequency/power conversion, `ReadSysFile` absence vs zero, glob lookup, DRM vendor-matched card scan, PCI address resolution |
+| `shared`   | frequency/power conversion, `ReadSysFile` absence vs zero, glob lookup, DRM vendor-matched card scan, PCI address resolution, identity-probe memoization (compute-once, independent keys, cached empty result, reset), the `-debug` logging gate |
 | `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, and the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows) |
 
 The frontend has no automated tests, and this environment has no JavaScript

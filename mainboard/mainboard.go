@@ -179,7 +179,7 @@ func addBoardMonitorChips(values map[string]shared.HardwareValue) {
 		if !ok || !isBoardMonitorChip(chipName) {
 			continue
 		}
-		log.Printf("Found mainboard sensor chip %q at %s\n", chipName, chipPath)
+		shared.Debugf("Found mainboard sensor chip %q at %s", chipName, chipPath)
 
 		for _, sensor := range numberedSensors(chipPath, "temp", maxBoardTemps) {
 			celsius, ok := milliCelsius(sensor.input)

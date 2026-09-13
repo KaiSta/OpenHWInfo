@@ -27,10 +27,10 @@ const amdVendorID = "0x1002"
 func probeAMD() ([]int, error) {
 	indices := shared.ProbeDRMCards(sysDir, amdVendorID)
 	for _, i := range indices {
-		log.Printf("Found AMD card at index %d\n", i)
+		shared.Debugf("Found AMD card at index %d", i)
 	}
 	if len(indices) == 0 {
-		log.Println("No AMD cards found")
+		shared.Debugf("No AMD cards found")
 	}
 	return indices, nil
 }
@@ -59,7 +59,7 @@ func resolveAMDGPUName(pciAddr string, cardIndex int) string {
 	cmd := exec.Command("sh", "-c", "lspci | grep -i 'vga\\|3d'")
 	output, err := cmd.Output()
 	if err != nil {
-		log.Printf("Error executing lspci command: %v\n", err)
+		shared.Debugf("Error executing lspci command: %v", err)
 		return "AMD GPU"
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -166,7 +166,7 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	cardPath = filepath.Join(cardPath, "hwmon")
 	hwmonPath := shared.FindFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
-		log.Println("No hwmon path found")
+		shared.Debugf("No hwmon path found for AMD card")
 		return shared.HardwareData{Name: chipsetName, Values: data}
 	}
 
@@ -225,14 +225,14 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 func GetAllInformations() []shared.HardwareData {
 	cards, err := probeAMD()
 	if err != nil || len(cards) == 0 {
-		log.Println("No AMD cards to collect information for")
+		shared.Debugf("No AMD cards to collect information for")
 		return nil
 	}
 
 	var result []shared.HardwareData
 	for _, cardIndex := range cards {
 		cardPath := shared.DRMCardDevicePath(sysDir, cardIndex)
-		log.Printf("Collecting information for AMD card %d\n", cardIndex)
+		shared.Debugf("Collecting information for AMD card %d", cardIndex)
 		data := collectGPUDataForCard(cardPath, cardIndex)
 		if !data.HasTelemetry() {
 			log.Printf("Skipping AMD card %d: no readable sensors", cardIndex)

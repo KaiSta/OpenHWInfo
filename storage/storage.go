@@ -104,7 +104,7 @@ func GetInformations() []shared.HardwareData {
 		// SMART at all rather than claiming the drive is fine.
 		status := addSmart(values, d.name)
 
-		log.Printf("Found drive %s (%s)\n", d.model, d.name)
+		shared.Debugf("Found drive %s (%s)", d.model, d.name)
 		result = append(result, shared.HardwareData{Name: d.model, Values: values, Status: status})
 	}
 

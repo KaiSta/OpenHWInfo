@@ -22,10 +22,10 @@ const intelVendorID = "0x8086"
 func probeIntel() ([]int, error) {
 	indices := shared.ProbeDRMCards(sysDir, intelVendorID)
 	for _, i := range indices {
-		log.Printf("Found Intel card at index %d\n", i)
+		shared.Debugf("Found Intel card at index %d", i)
 	}
 	if len(indices) == 0 {
-		log.Println("No Intel cards found")
+		shared.Debugf("No Intel cards found")
 	}
 	return indices, nil
 }
@@ -253,7 +253,7 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 	cardPath = filepath.Join(cardPath, "hwmon")
 	hwmonPath := shared.FindFirstSubpath(cardPath, "hwmon*")
 	if hwmonPath == "" {
-		log.Println("No hwmon path found for Intel card")
+		shared.Debugf("No hwmon path found for Intel card")
 		return shared.HardwareData{Name: gpuName, Values: data}
 	}
 
@@ -292,14 +292,14 @@ func collectGPUDataForCard(cardPath string, cardIndex int) shared.HardwareData {
 func GetAllInformations() []shared.HardwareData {
 	cards, err := probeIntel()
 	if err != nil || len(cards) == 0 {
-		log.Println("No Intel cards to collect information for")
+		shared.Debugf("No Intel cards to collect information for")
 		return nil
 	}
 
 	var result []shared.HardwareData
 	for _, cardIndex := range cards {
 		cardPath := shared.DRMCardDevicePath(sysDir, cardIndex)
-		log.Printf("Collecting information for Intel card %d\n", cardIndex)
+		shared.Debugf("Collecting information for Intel card %d", cardIndex)
 		data := collectGPUDataForCard(cardPath, cardIndex)
 		if !data.HasTelemetry() {
 			log.Printf("Skipping Intel card %d: no readable sensors", cardIndex)
