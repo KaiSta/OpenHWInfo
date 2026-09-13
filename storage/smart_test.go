@@ -384,9 +384,10 @@ func TestLifeAttributeNamesPinTheAllowlist(t *testing.T) {
 }
 
 // TestWrittenFromAttributes pins how attribute 241's count becomes bytes. The
-// count is what the drive reports and the unit is the vendor's, so the platform's
-// SMART library is the only thing that can describe the latter; a unit that is
-// not a byte count must yield nothing rather than a converted figure.
+// count is the drive's and the unit is the vendor's, so the platform's SMART
+// library is the only thing that can describe the latter; a unit that is not a
+// byte count must yield nothing rather than a converted figure, and the
+// library's own "MB" figure is not megabytes of data (see ataMBUnitSectors).
 func TestWrittenFromAttributes(t *testing.T) {
 	// The review machine's own drive would report 20191042413 sectors here
 	// (10.34 TB) if it carried the attribute at all.
@@ -415,9 +416,21 @@ func TestWrittenFromAttributes(t *testing.T) {
 			wantRead: true,
 		},
 		{
-			name:     "megabytes",
-			attr:     ataAttribute{ID: 241, Name: "total-lbas-written", Pretty: 4_000_000, PrettyUnit: ataUnitMB},
-			want:     4_000_000_000_000,
+			// libatasmart's "MB": the drive's sector counter run through the
+			// library's 32 MiB-unit conversion, so 65,536,000,000 means a counter
+			// of 1,953,125,000 LBAs — exactly 1 TB — and not 65,536 TB.
+			name:     "libatasmart's mb unit",
+			attr:     ataAttribute{ID: 241, Name: "total-lbas-written", Pretty: 65_536_000_000, PrettyUnit: ataUnitMB},
+			want:     1_000_000_000_000,
+			wantRead: true,
+		},
+		{
+			// The live figure from the review host's Samsung 850 EVO. Read as the
+			// library's MB it came out as 979,862.87 TB; the drive has written
+			// 14.95 TB.
+			name:     "a real drive is not six figures of terabytes",
+			attr:     ataAttribute{ID: 241, Name: "total-lbas-written", Pretty: 979_862_872_668, PrettyUnit: ataUnitMB},
+			want:     14_951_520_884_216,
 			wantRead: true,
 		},
 		{

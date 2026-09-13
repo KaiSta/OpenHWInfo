@@ -471,6 +471,15 @@ const (
 	ataUnitMB       = 7
 )
 
+// ataMBUnitSectors is what one of libatasmart's "MB" units of attribute 241/242
+// is really worth. The library converts the drive's counter with
+// raw * 32 MiB / 1e6 and labels the result MB, i.e. it feeds the counter in as
+// if it counted 32 MiB units (65536 512-byte sectors each) rather than the
+// 512-byte sectors ATA defines. Its figure is therefore 65536 times the drive's
+// byte count, and the sector reading is recovered by dividing that factor back
+// out.
+const ataMBUnitSectors = 32 * 1024 * 1024 / 512
+
 // writtenFromAttributes reads a drive's lifetime bytes written out of an ATA
 // attribute table. It reports false when the drive carries no such counter,
 // which is common: an SSD that reports its endurance is not obliged to report
@@ -480,9 +489,11 @@ const (
 // 512-byte sectors — but its unit is not: some vendors, SanDisk and WD among
 // them, count in 32 MiB units instead, and smartmontools needs a per-model entry
 // in its drive database to tell the two conventions apart. Nothing in the reading
-// distinguishes them, so this reads the sector convention the standard specifies
-// and honors the unit the platform's SMART library reports when it reports a
-// different byte count. A unit that is not a byte count at all is refused rather
+// distinguishes them, so this always takes the sector convention the ATA
+// standard specifies — including when the SMART library reports the counter
+// under its own "MB" unit, which is the same counter with the 32 MiB-unit
+// assumption already applied and is converted back rather than trusted (see
+// ataMBUnitSectors). A unit that is not a byte count at all is refused rather
 // than converted, and a counter of zero yields nothing: a drive that reports
 // "none" and a drive that reports nothing are indistinguishable, and printing
 // 0.00 TB for either would be the app's claim rather than the drive's.
@@ -497,7 +508,12 @@ func writtenFromAttributes(attrs []ataAttribute) (uint64, bool) {
 			// read.
 			return uint64(attr.Pretty) * 512, true
 		case ataUnitMB:
-			return uint64(attr.Pretty) * 1_000_000, true
+			// libatasmart's "MB" is not megabytes of data: it is the drive's
+			// sector counter run through the library's 32 MiB-unit conversion
+			// (see ataMBUnitSectors). Dividing that factor back out yields the
+			// byte count the ATA definition gives; leaving it in is what made a
+			// half-full 500 GB SSD report six figures of terabytes.
+			return uint64(attr.Pretty) * 1_000_000 / ataMBUnitSectors, true
 		}
 		return 0, false
 	}
