@@ -57,7 +57,7 @@ The following were fixed and are now covered by tests.
    `strings.Split(line, ":")[1]` panicked on any line lacking a colon.
    Parsing now goes through `firstFieldAfterColon` / `labelBeforeColon`, which
    return `""` for colon-less lines, and `extractTemp` bounds-checks its split.
-   Regression tests: `TestParseSensorOutputMalformedDoesNotPanic`,
+   Regression tests: `TestFirstFieldAfterColon`,
    `TestParseCpuInfoMalformedDoesNotPanic`.
 
 2. **Duplicate helpers across vendor packages.** `runShell`, `findFirstSubpath`,
