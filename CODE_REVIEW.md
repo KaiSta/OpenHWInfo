@@ -925,3 +925,16 @@ These are known limitations rather than defects, listed roughly by value.
    something it is not. The columns are blank for it the way they are for a
    drive's model name, which is consistent but means the card cannot show how the
    ratio has moved since the app started.
+
+27. **Six packages and one exported type have no doc comment.** `amd`, `intel`,
+    `nvidia`, `cpuinfo`, `shared` and the root `main` package carry no
+    `// Package <name>` block, and `main.Data`, the payload the frontend polls,
+    none either. `mainboard`, `storage`, `memory` and `battery` show the shape
+    that `AGENTS.md` asks new code to follow. Nothing depends on the omission,
+    which makes this documentation debt rather than a defect, but the package
+    comment is where a future reader finds the data source and the caps
+    together; for these packages that lives only in `README.md`, as prose per
+    device. Writing the blocks is small enough to be its own commit; folding
+    them into an unrelated fix would break the one-logical-change-per-commit
+    rule. No test can assert any of it, which is why the gap is listed here
+    rather than fixed.

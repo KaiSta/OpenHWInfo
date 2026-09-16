@@ -198,11 +198,17 @@ Go:
 
 - Standard `gofmt` formatting, tabs, no exception. CI fails on a `gofmt -l .`
   diff, so format before committing.
-- Every exported identifier and every package has a doc comment. Comments here
-  explain **why**, not what: a comment earns its place by recording the tradeoff,
-  the rejected alternative, or the hardware quirk behind the line. Compare
-  `shared.CachedProbe` (why the cache stores empty results) or `HardwareUnit`
-  (why `Gibibyte` and `Gigabyte` are separate).
+- Comments here explain **why**, not what: a comment earns its place by
+  recording the tradeoff, the rejected alternative, or the hardware quirk
+  behind the line. Compare `shared.CachedProbe` (why the cache stores empty
+  results) or `HardwareUnit` (why `Gibibyte` and `Gigabyte` are separate).
+  Every exported identifier carries a doc comment, and every package carries
+  one of its own: a `// Package <name>` block naming the data source and the
+  caps. `mainboard`, `storage`, `memory` and `battery` show that shape;
+  `amd`, `intel`, `nvidia`, `cpuinfo`, `shared`, the root `main` package and
+  `main.Data` predate the rule and still lack one. The backlog is listed under
+  `Remaining opportunities` in `CODE_REVIEW.md`, so a new package copies the
+  four that have a comment rather than the six that do not.
 - A comment spanning a decision should name what happens in the awkward case
   ("a drive whose counter cannot be read gets no row, because a figure quietly
   too low is worse than no figure").
