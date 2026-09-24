@@ -13,9 +13,9 @@ so it holds only what applies to most edits; the detail lives in the skills belo
 Skills live in `.claude/skills/<name>/SKILL.md` with `name` (matching the folder)
 and `description` frontmatter, and deep detail in that skill's `docs/`. This one
 path is read by Codebuff, Cline and Claude Code, so an instruction lives there once
-rather than once per tool. Read a skill instead of exploring: `main.go` (599
-lines), `main_test.go` (932) and `website/app.js` (908) are meant to be read as
-40-line windows around a search hit, never whole.
+rather than once per tool. Read a skill instead of exploring: `main.go`,
+`main_test.go` and `website/app.js` are meant to be read as 40-line windows
+around a search hit, never whole.
 
 ## What this project is
 

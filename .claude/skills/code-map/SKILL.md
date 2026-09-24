@@ -5,9 +5,9 @@ description: Navigable index of OpenHWInfo — which file owns what, the poll ch
 
 # OpenHWInfo code map
 
-Load this before opening a source file. `main.go`, `main_test.go` and
-`website/app.js` are 600–930 lines each and `CODE_REVIEW.md` is ~940 — read any of
-them as 40-line windows around a search hit, never whole.
+Load this before opening a source file. `main.go`, `main_test.go`,
+`website/app.js` and `CODE_REVIEW.md` are long files — read any of them as
+40-line windows around a search hit, never whole.
 
 **There are no line numbers in this file, deliberately.** A number written here
 would be wrong after the next edit; the symbols and their lines live in the
@@ -19,8 +19,9 @@ generated indexes beside this file, which `go test ./...` keeps current:
 
 ## Read code cheaply
 
-1. Search first: `code_search` returns matches with their current line numbers.
-2. Then read the window: `read_files { path, offset, limit }` around the hit.
+1. Search first — your search tool returns matches with their current line
+   numbers; trust those over anything remembered from an earlier session.
+2. Then read the window — about 40 lines around the hit, never the whole file.
 3. For a whole file's shape in one read, use its entry in `docs/symbol-index.md`.
 4. Read a package's first ~30 lines before its code — that is where its
    `// Package` comment states the data source and the caps.
