@@ -31,7 +31,7 @@ define install-icons
 	done
 endef
 
-.PHONY: build run dev test lint install package clean
+.PHONY: build run dev test lint map hooks install package clean
 
 ## Build the native binary (production)
 build:
@@ -52,6 +52,22 @@ test:
 
 lint:
 	go vet ./...
+
+# Regenerate the code-map indexes under .claude/skills/code-map/docs/ from the
+# source. They are committed, so that every agent finds them without building
+# first, and `go test ./...` fails when one is stale -- so run this (and commit
+# the result) whenever a symbol is added, renamed or removed.
+map:
+	go test . -run TestAgentDocsIndexesAreCurrent -agentdocs.update
+
+# Install the repository's git hooks (see .githooks/). Git only reads hooks from
+# $GIT_DIR/hooks, which is not versioned, so this points core.hooksPath at the
+# tracked directory instead. It writes to this clone's repository config only, and
+# is safe to re-run.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "Hooks installed: pre-commit gates gofmt and the generated code map,"
+	@echo "commit-msg checks the subject line. CI remains the authority."
 
 # Install the desktop entry + icon so Cinnamon/GNOME show our logo in the
 # panel/taskbar (they match a window's WM_CLASS to a .desktop file, not the

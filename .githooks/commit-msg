@@ -1,0 +1,61 @@
+#!/bin/sh
+# The part of the commit contract a machine can check: the subject line. The rest
+# of it -- why the change was needed, what was rejected, what was verified on real
+# hardware -- is judgement, and lives in the `git-workflow` skill.
+#
+# Git passes the path of the message file as the only argument. Comment lines are
+# already stripped, so line one is the subject a reader will see.
+set -e
+
+message_file="$1"
+if [ ! -f "$message_file" ]; then
+	echo "commit-msg: no message file at '$message_file'" >&2
+	exit 1
+fi
+
+subject="$(sed -n '1p' "$message_file")"
+
+if [ -z "$subject" ]; then
+	echo "commit-msg: the subject line is empty." >&2
+	echo "  The git-workflow skill has the shape a subject takes here." >&2
+	exit 1
+fi
+
+# Git strips comment lines by default, so this only fires for a message written
+# with commit.cleanup=verbatim, where a leading # is still never a subject.
+case "$subject" in
+\#*)
+	echo "commit-msg: the subject is a comment line: $subject" >&2
+	exit 1
+	;;
+esac
+
+# A subject is a title, not a sentence: no trailing period, and none of the
+# placeholder subjects the project's history is not meant to grow more of.
+case "$subject" in
+*. | *!)
+	echo "commit-msg: the subject must not end with punctuation: $subject" >&2
+	exit 1
+	;;
+esac
+
+length=$(printf '%s' "$subject" | wc -c | tr -d ' ')
+if [ "$length" -gt 72 ]; then
+	echo "commit-msg: the subject is $length characters, the limit is 72: $subject" >&2
+	exit 1
+fi
+
+lowered="$(printf '%s' "$subject" | tr '[:upper:]' '[:lower:]')"
+case "$lowered" in
+*wip* | *"fix up"* | *fixup* | *"missing stuff"* | *"various improvements"*)
+	echo "commit-msg: placeholder subject, say what changed and why: $subject" >&2
+	exit 1
+	;;
+esac
+
+# The body is judgement, so it is reported rather than blocked: a documentation-only
+# or formatting-only commit may legitimately be one line, and the project says so.
+if [ "$(grep -c . "$message_file")" -lt 3 ]; then
+	echo "commit-msg: note -- this message has no body. A behaviour change needs one" >&2
+	echo "  (old behaviour, new behaviour, verification); a doc-only change need not." >&2
+fi

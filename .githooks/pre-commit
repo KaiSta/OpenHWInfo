@@ -1,0 +1,31 @@
+#!/bin/sh
+# The gates that must hold before a commit exists.
+#
+# Deliberately fast: the full suite (-race), the production build and the vet run
+# are CI's job, and `make test` is one command away. What lives here is only what a
+# commit makes worse for somebody else -- a tree that no longer matches its own
+# index, or a formatting diff that turns into noise in the next author's patch.
+#
+# Nothing here repairs a file. Formatting is gated rather than fixed in CI for the
+# same reason: a silent rewrite is a decision taken away from the author. So a
+# failure prints the command that does the repair and exits non-zero.
+set -e
+
+unformatted="$(gofmt -l .)"
+if [ -n "$unformatted" ]; then
+	echo "pre-commit: gofmt would reformat:" >&2
+	echo "$unformatted" | sed 's/^/  /' >&2
+	echo "  fix: gofmt -w ." >&2
+	exit 1
+fi
+
+# The code map under .claude/ is read by every agent working in this repository and
+# it carries line numbers, so it goes stale the moment a symbol moves. This is the
+# same check CI runs (TestAgentDocsIndexesAreCurrent), but catching it here is what
+# keeps a stale map out of the history rather than out of a later build.
+if ! output="$(go test . -run TestAgentDocsIndexesAreCurrent 2>&1)"; then
+	echo "$output" >&2
+	echo "pre-commit: the generated code map does not match the tree." >&2
+	echo "  fix: make map   (then stage .claude/skills/code-map/docs/)" >&2
+	exit 1
+fi

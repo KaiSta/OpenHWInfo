@@ -13,6 +13,8 @@ make run        # builds + runs the native app
 make build      # just builds → ./OpenHWInfo
 make dev        # development mode with hot-reload (serves frontend from disk)
 make test       # run all tests
+make map        # refresh the agent-facing code map (make test checks it is current)
+make hooks      # install the repo's git hooks into this clone (one-time)
 make package    # build a .deb installer into dist/ (also: make install)
 make clean      # remove binary and dist/
 ```

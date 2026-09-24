@@ -670,6 +670,20 @@ The following were fixed and are now covered by tests.
   `wails build` cannot dirty the tree either. `make build` remains the supported
   build path.
 
+- The agent-facing instructions (`AGENTS.md`, `.clinerules/`, `.claude/skills/`)
+  are tracked deliberately: an agent has to find them before it builds anything,
+  so they cannot be build output. The volatile half of the code map — which
+  symbols exist and on which line — is generated from the source and committed, so
+  `make map` is the only writer and `go test ./...` is the check; the hand-written
+  half carries no line numbers at all, which is what keeps the two from ever
+  contradicting each other.
+- The same gates run earlier for anyone who opts in: `.githooks/` (installed with
+  `make hooks`, which sets `core.hooksPath`) gates `gofmt` and the generated code
+  map before a commit exists, and checks the subject-line rules. Hooks are local
+  and per clone, so they are a convenience rather than the authority — CI runs the
+  same checks plus `-race`, `go vet` and the production build for every push, and
+  nothing depends on a hook being installed.
+
 ## Test coverage
 
 | Package    | Coverage |
@@ -683,7 +697,7 @@ The following were fixed and are now covered by tests.
 | `battery`  | power_supply-mocked battery listing: an energy (Wh) pack with every field, a charge (Ah) pack that must produce the other family's rows and no time estimate, two packs as two cards in supply-name order, absent and unparsable fields producing no rows, an empty bay (`present` 0), a peripheral's battery (scope `Device`) and a kernel that reports no scope, a supply with no readable type, a desktop, the AC row for mains/USB-C/unreadable-supply/absent-adapter and the UPS exclusion, the health thresholds with a battery below each, no design capacity meaning no verdict, and the time estimate in each direction |
 | `storage`  | sysfs-mocked drive listing (SATA SSD, NVMe, HDD, and the virtual/optical devices that must not appear), medium and capacity from the rotational flag and sector count, NVMe labels vs a drivetemp chip, rejection of a non-drive hwmon chip, partition-to-disk mapping with a mount-table fixture and a stubbed `statfs` (aggregation, duplicate mounts, an unmappable `dm-0`, an escaped space, a failing lookup, a missing mount table); SMART: every health rule as its own case (a healthy drive with exactly one reading broken), Kelvin and wire-type decoding for both interfaces, the life-attribute allowlist and its threshold scaling, the fabrication guards (absent bad-sector count, never-read drive, empty NVMe dictionary), every row's presence *and* unit, and the row→template contract |
 | `shared`   | frequency/power conversion, `ReadSysFile` absence vs zero, glob lookup, DRM vendor-matched card scan, PCI address resolution, identity-probe memoization (compute-once, independent keys, cached empty result, reset), the `-debug` logging gate |
-| `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows), and the GPU view filter (a card with no readings is dropped, and a machine that reports no card gets no GPU card rather than an empty one) |
+| `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows), the agent-doc guard (the committed code-map indexes match the tree, so a renamed symbol fails the suite instead of leaving a stale map), and the GPU view filter (a card with no readings is dropped, and a machine that reports no card gets no GPU card rather than an empty one) |
 
 The frontend has no automated tests, and this environment has no JavaScript
 runtime to add one with (`node`/`npm` are absent, and the app ships a static page
