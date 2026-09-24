@@ -644,6 +644,19 @@ The following were fixed and are now covered by tests.
       rendered against that payload plus a driven case (3.21 GiB swapped out,
       `Zram Usage 41.34 %`, `Zram Memory 612.44 MiB`, `Zram Ratio 5.24:1`).
 
+37. **A machine with no GPU drew an empty GPU card** (`main.go`). `GetData`
+    substituted a `HardwareData` named `No GPU` when no vendor reported one, and the
+    frontend draws one card per entry in `Data.GpuViews` — so the card appeared with
+    the subtitle `GPU · 0 metrics` over an empty table. It is the failure item 13
+    fixed one layer down, reintroduced deliberately: `HasTelemetry` filters such
+    cards at the collector, but the placeholder was built after that filter, in the
+    view assembly. A machine reporting no card now contributes no card at all, a
+    card that reports no readings is dropped where the views are built (as the board
+    and memory cards are withheld), and `-debug` says that no vendor reported one so
+    that a missing card is distinguishable from a failed read. Regression tests:
+    `TestGPUViewsSkipCardsWithNoReadings`,
+    `TestGPUViewsKeepPerCardRangesWhenACardAppears`.
+
 ## Repo hygiene
 
 - `go.mod` and `go.sum` were listed in `.gitignore` even though both are tracked.
@@ -670,7 +683,7 @@ The following were fixed and are now covered by tests.
 | `battery`  | power_supply-mocked battery listing: an energy (Wh) pack with every field, a charge (Ah) pack that must produce the other family's rows and no time estimate, two packs as two cards in supply-name order, absent and unparsable fields producing no rows, an empty bay (`present` 0), a peripheral's battery (scope `Device`) and a kernel that reports no scope, a supply with no readable type, a desktop, the AC row for mains/USB-C/unreadable-supply/absent-adapter and the UPS exclusion, the health thresholds with a battery below each, no design capacity meaning no verdict, and the time estimate in each direction |
 | `storage`  | sysfs-mocked drive listing (SATA SSD, NVMe, HDD, and the virtual/optical devices that must not appear), medium and capacity from the rotational flag and sector count, NVMe labels vs a drivetemp chip, rejection of a non-drive hwmon chip, partition-to-disk mapping with a mount-table fixture and a stubbed `statfs` (aggregation, duplicate mounts, an unmappable `dm-0`, an escaped space, a failing lookup, a missing mount table); SMART: every health rule as its own case (a healthy drive with exactly one reading broken), Kelvin and wire-type decoding for both interfaces, the life-attribute allowlist and its threshold scaling, the fabrication guards (absent bad-sector count, never-read drive, empty NVMe dictionary), every row's presence *and* unit, and the row→template contract |
 | `shared`   | frequency/power conversion, `ReadSysFile` absence vs zero, glob lookup, DRM vendor-matched card scan, PCI address resolution, identity-probe memoization (compute-once, independent keys, cached empty result, reset), the `-debug` logging gate |
-| `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, and the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows) |
+| `main`     | min/max history, history window cap, dynamic per-core/per-CCD, per-board-row and per-drive template generation, per-device history scoping, the collector→frontend key contract (every rendered key has a template; topology and label keys never become rows), and the GPU view filter (a card with no readings is dropped, and a machine that reports no card gets no GPU card rather than an empty one) |
 
 The frontend has no automated tests, and this environment has no JavaScript
 runtime to add one with (`node`/`npm` are absent, and the app ships a static page

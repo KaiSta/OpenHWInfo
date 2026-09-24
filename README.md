@@ -162,6 +162,8 @@ VRAM is not read yet — see the Arc item under *Remaining opportunities* in
 
 A sensor file that does not exist produces **no metric**, rather than a zero reading — a card with no hotspot sensor or no power cap simply omits those rows. Similarly, a card that exposes no readable sensors at all (for example an integrated GPU whose hwmon directory is absent) is not rendered as an empty card.
 
+A machine that reports no GPU whatsoever — a virtual machine, a headless host, or a card whose driver exposes nothing — gets no GPU card either, exactly as the memory and mainboard cards are withheld when the machine reports nothing for them. The card is left out rather than drawn as a title over an empty table, because that table would state nothing the machine said. `./OpenHWInfo -debug` is what tells the two cases apart: it logs whether the collectors found a card and why one was skipped, since a card that is simply absent leaves no other trace.
+
 ## Memory infos
 
 `/proc/meminfo` (RAM and swap), `/proc/pressure/memory` (the kernel's own pressure accounting) and `/sys/block/zramN` (the compressed store swap usually lives on) — one card for the machine

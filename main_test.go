@@ -700,6 +700,68 @@ func TestDeviceViewScopesHistoryPerDevice(t *testing.T) {
 	}
 }
 
+// TestGPUViewsSkipCardsWithNoReadings pins that a machine reporting no GPU gets no
+// GPU card rather than a card holding nothing. The frontend draws one card per
+// entry in Data.GpuViews, so an entry with no rows is a title and a subtitle over
+// an empty table -- a claim about the machine in the shape of a reading it never
+// gave.
+func TestGPUViewsSkipCardsWithNoReadings(t *testing.T) {
+	cases := []struct {
+		name  string
+		cards []shared.HardwareData
+	}{
+		{"no vendor reported a card", nil},
+		{"an empty card list", []shared.HardwareData{}},
+		{
+			"a card with no readings",
+			[]shared.HardwareData{{Name: "No GPU", Values: map[string]shared.HardwareValue{}}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if views := gpuViews(newHistoryStore(), tc.cards); len(views) != 0 {
+				t.Errorf("got %d GPU view(s); want none", len(views))
+			}
+		})
+	}
+}
+
+// TestGPUViewsKeepPerCardRangesWhenACardAppears pins why the history prefix follows
+// a card's position in the vendor list rather than how many cards were kept: when
+// the first card starts reporting, it must not inherit the range the second card
+// built while it was alone.
+func TestGPUViewsKeepPerCardRangesWhenACardAppears(t *testing.T) {
+	history := newHistoryStore()
+	card := func(name string, celsius float64) shared.HardwareData {
+		return shared.HardwareData{
+			Name: name,
+			Values: map[string]shared.HardwareValue{
+				shared.GPUTemp.Key: shared.NewHardwareValue(celsius, shared.Celsius, shared.Temperature),
+			},
+		}
+	}
+
+	// First poll: only the second card reports, as it would on a machine whose
+	// integrated GPU exposes no sensors yet.
+	silent := shared.HardwareData{Name: "Iris Xe", Values: map[string]shared.HardwareValue{}}
+	if views := gpuViews(history, []shared.HardwareData{silent, card("Radeon RX 7900", 90)}); len(views) != 1 {
+		t.Fatalf("first poll kept %d view(s); want the one card that reported", len(views))
+	}
+
+	// Second poll: both report, and the integrated card is read for the first time.
+	views := gpuViews(history, []shared.HardwareData{card("Iris Xe", 50), card("Radeon RX 7900", 95)})
+	if len(views) != 2 {
+		t.Fatalf("second poll kept %d view(s); want both cards", len(views))
+	}
+	if got := views[0].MaxValues[shared.GPUTemp.Key]; got != "50.00 °C" {
+		t.Errorf("the card that appeared late has max %q; want its own first reading (its range must not be the other card's)", got)
+	}
+	if got := views[1].MinValues[shared.GPUTemp.Key]; got != "90.00 °C" {
+		t.Errorf("the card that reported throughout has min %q; want the range it built while alone", got)
+	}
+}
+
 // TestFormatValueAppendsTheUnit covers why the unit belongs to the reading: a
 // numeric value states what it measures, so a row cannot be labelled in one unit
 // while carrying a figure in another.

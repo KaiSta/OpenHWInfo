@@ -328,22 +328,16 @@ func (a *App) GetData() Data {
 
 	// Collect GPU data from every vendor. Each vendor probes once and returns nil
 	// when it has nothing to report, so there is no separate availability check
-	// (which would run lspci or scan sysfs a second time on every poll).
+	// (which would run lspci or scan sysfs a second time on every poll). A machine
+	// with no detectable GPU gets no GPU card at all; see gpuViews.
 	var allGPUs []shared.HardwareData
 	allGPUs = append(allGPUs, nvidia.GetAllInformations()...)
 	allGPUs = append(allGPUs, intel.GetAllInformations()...)
 	allGPUs = append(allGPUs, amd.GetAllInformations()...)
-
-	// If no GPU was found, add a placeholder
 	if len(allGPUs) == 0 {
-		allGPUs = append(allGPUs, shared.HardwareData{Name: "No GPU", Values: make(map[string]shared.HardwareValue)})
-	}
-
-	// Build per-GPU view data. The history is scoped per card so that GPU 0's
-	// range never mixes with GPU 1's.
-	var gpuViews []DeviceView
-	for gpuIdx, gpuData := range allGPUs {
-		gpuViews = append(gpuViews, deviceView(gpuData, gpuTemplates, gpuHistory, fmt.Sprintf("gpu%d.", gpuIdx)))
+		// A missing card is silent, so -debug is what says the app looked and found
+		// nothing rather than never looking.
+		shared.Debugf("no GPU reported by any vendor; rendering no GPU card")
 	}
 
 	// Each drive is its own card as well, and keeps its own history for the same
@@ -401,7 +395,7 @@ func (a *App) GetData() Data {
 
 	return Data{
 		CpuKeys:      filteredCpuKeys,
-		GpuViews:     gpuViews,
+		GpuViews:     gpuViews(gpuHistory, allGPUs),
 		DiskViews:    diskViews,
 		CpuValues:    cpuStringValues,
 		CpuMinValues: cpuMinValues,
@@ -410,6 +404,31 @@ func (a *App) GetData() Data {
 		Memory:       memoryView,
 		BatteryViews: batteryViews,
 	}
+}
+
+// gpuViews turns each reported card into a view and drops the cards that report no
+// rows at all. The frontend draws one card per entry, so an entry with no readings
+// is an empty table on screen: a title, a subtitle counting zero metrics and
+// nothing under it. An earlier revision padded this list with a "No GPU" entry on a
+// machine that reported none, which drew exactly that empty card. A card carrying
+// nothing but identity rows is a different judgement, made once by
+// HardwareData.HasTelemetry in the collectors, so this filter is deliberately only
+// about having no rows: a card that reports a reading is kept whether or not its
+// neighbours reported one.
+//
+// The history prefix is keyed to the card's position in the vendor list, not to
+// how many cards were kept, so a card that starts reporting later cannot inherit
+// the range another card has already built.
+func gpuViews(history *historyStore, cards []shared.HardwareData) []DeviceView {
+	var views []DeviceView
+	for index, card := range cards {
+		view := deviceView(card, gpuTemplates, history, fmt.Sprintf("gpu%d.", index))
+		if len(view.Keys) == 0 {
+			continue
+		}
+		views = append(views, view)
+	}
+	return views
 }
 
 // deviceView turns one device's collected values into the view the frontend
