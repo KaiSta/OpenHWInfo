@@ -14,6 +14,7 @@ import (
 	"github.com/KaiSta/OpenHWInfo/battery"
 	"github.com/KaiSta/OpenHWInfo/cpuinfo"
 	"github.com/KaiSta/OpenHWInfo/intel"
+	"github.com/KaiSta/OpenHWInfo/lisuan"
 	"github.com/KaiSta/OpenHWInfo/mainboard"
 	"github.com/KaiSta/OpenHWInfo/memory"
 	"github.com/KaiSta/OpenHWInfo/nvidia"
@@ -334,6 +335,7 @@ func (a *App) GetData() Data {
 	allGPUs = append(allGPUs, nvidia.GetAllInformations()...)
 	allGPUs = append(allGPUs, intel.GetAllInformations()...)
 	allGPUs = append(allGPUs, amd.GetAllInformations()...)
+	allGPUs = append(allGPUs, lisuan.GetAllInformations()...)
 	if len(allGPUs) == 0 {
 		// A missing card is silent, so -debug is what says the app looked and found
 		// nothing rather than never looking.

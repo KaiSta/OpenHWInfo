@@ -33,10 +33,19 @@ Document sections are deliberately absent -- they move with every prose edit:
 ### intel/pci_ids.go — 214 lines
 - vars: intelGraphicsModels 23, intelCodenameOnlyModels 210
 
-### main.go — 618 lines
-- funcs: cpuKeyTemplates 79, indexedCPUTemplates 95, numericSuffixes 109, boardKeyTemplates 130, labelledBoardTemplates 150, diskKeyTemplates 214, newHistoryStore 283, historyStore.updateAndCalculate 287, NewApp 309, App.startup 314, App.shutdown 319, App.GetData 325, gpuViews 422, deviceView 439, updateHistoryAndCalculateMinMax 481, calculateMinMax 521, formatValue 545, withUnit 556, withUnits 573, main 581
-- types: DeviceView 43, Data 54, historyStore 278, App 304
-- vars: assets 32, appIcon 37, gpuTemplates 167, diskTemplates 193, memTemplates 224, batteryTemplates 251, cpuHistory 295, gpuHistory 296, diskHistory 297, boardHistory 298, memoryHistory 299, batteryHistory 300
+### lisuan/lisuan.go — 306 lines
+- funcs: probeLisuan 49, getPCIDeviceID 62, getGPUName 74, resolveLisuanGPUName 89, getDriverVersion 101, resolveDriverVersion 111, driverModuleName 126, classifyTemperatureLabel 158, collectGPUDataForCard 175, addTemperatures 228, countTemperatureSensors 264, milliCelsius 275, GetAllInformations 287
+- types: temperatureKind 144
+- consts: lisuanVendorID 38, maxTemps 44, temperatureCard 149, temperatureHotspot 150, temperatureMemory 151
+- vars: sysDir 35
+
+### lisuan/pci_ids.go — 28 lines
+- vars: lisuanModels 20
+
+### main.go — 620 lines
+- funcs: cpuKeyTemplates 80, indexedCPUTemplates 96, numericSuffixes 110, boardKeyTemplates 131, labelledBoardTemplates 151, diskKeyTemplates 215, newHistoryStore 284, historyStore.updateAndCalculate 288, NewApp 310, App.startup 315, App.shutdown 320, App.GetData 326, gpuViews 424, deviceView 441, updateHistoryAndCalculateMinMax 483, calculateMinMax 523, formatValue 547, withUnit 558, withUnits 575, main 583
+- types: DeviceView 44, Data 55, historyStore 279, App 305
+- vars: assets 33, appIcon 38, gpuTemplates 168, diskTemplates 194, memTemplates 225, batteryTemplates 252, cpuHistory 296, gpuHistory 297, diskHistory 298, boardHistory 299, memoryHistory 300, batteryHistory 301
 
 ### mainboard/mainboard.go — 322 lines
 - funcs: GetInformations 69, isBoardZone 103, addThermalZones 117, isBoardMonitorChip 161, addBoardMonitorChips 173, numberedSensors 220, sensorIndex 243, addTemperature 262, addFan 278, milliCelsius 293, sortByTrailingNumber 303, trailingNumber 312

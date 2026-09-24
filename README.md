@@ -160,6 +160,17 @@ system memory. Discrete Arc cards are detected and named, but their dedicated
 VRAM is not read yet — see the Arc item under *Remaining opportunities* in
 `CODE_REVIEW.md` for the current gaps.
 
+### Lisuan
+
+DRM sysfs `/sys/class/drm/cardN/device` (PCI vendor ID `0x4c54`, the vendor Lisuan Technology registered for the 7G100 series) + the card's hwmon directory + its bound driver module
+
+* Name — from the PCI device ID (`0x5000`–`0x5006`) through a table built out of the PCI ID database (`lisuan/pci_ids.go`). There is deliberately no `lspci` fallback, unlike the AMD and Intel collectors: the vendor database most distributions ship has no entry for `0x4c54` yet, so a query can only hand the identifiers back, and an identifier is not a card name. A device ID the table does not know is reported as `Lisuan GPU` rather than guessed at.
+* Driver version — read from the module the card is actually bound to, discovered through the card's own `driver` and `module` sysfs links rather than a hardcoded module name, since the Lisuan driver's name is not documented publicly.
+* Temperature — the card's own sensor, with the hotspot and video-memory rows filled from whichever sensors the driver *labels* as such (`hotspot`, `junction`, `mem`, `vram`, `hbm`). Nothing standard fixes a driver's sensor order, so an unlabelled sensor is reported as the card's own reading rather than moved into a row that would claim the number means something else.
+* GPU clock (`freq1_input`, or `freq0_input` on a driver publishing one channel), average power draw and power cap, and fan speed.
+
+A sensor the driver does not publish produces no row, and a card whose driver publishes nothing but its identity is not drawn at all — the `-debug` log is what says so. **This collector has not been checked against a real Lisuan card**, and cannot be: no machine here has one, and the driver's sysfs surface is not publicly documented. It therefore reads only what the kernel itself defines — the DRM card node, the hwmon interface, and the module's `version` — and derives nothing from another vendor's interface. VRAM size, VRAM in use and GPU utilisation are absent for exactly that reason: those attribute names belong to amdgpu's interface, and reading them here would be a guess presented as support. See the Lisuan item under *Remaining opportunities* in `CODE_REVIEW.md` for what would close the gap.
+
 ### Common behaviour
 
 A sensor file that does not exist produces **no metric**, rather than a zero reading — a card with no hotspot sensor or no power cap simply omits those rows. Similarly, a card that exposes no readable sensors at all (for example an integrated GPU whose hwmon directory is absent) is not rendered as an empty card.

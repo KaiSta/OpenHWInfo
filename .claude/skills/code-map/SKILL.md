@@ -45,14 +45,14 @@ generated indexes beside this file, which `go test ./...` keeps current:
 | `storage/smart.go` | UDisks2/D-Bus SMART: fetch, cache, health verdict |
 | `storage/statfs_linux.go` / `_other.go` | the only build-tagged files (`linux` / `!linux`) |
 | `battery/battery.go` | `/sys/class/power_supply`, health verdict |
-| `amd/amd.go`, `intel/intel.go` (+`pci_ids.go`), `nvidia/nvidia.go` | one GPU vendor each |
+| `amd/amd.go`, `intel/intel.go` (+`pci_ids.go`), `nvidia/nvidia.go`, `lisuan/lisuan.go` (+`pci_ids.go`) | one GPU vendor each |
 | `website/app.js` | the whole renderer: cards, gauges, core grid, polling |
 | `website/styles.css` | the `good`/`warn`/`bad` palette gauges and badges share |
 
 ## The poll chain — one path, five hops
 
 1. `website/app.js` `POLL_MS` (5 s), `getData()` → `window.go.main.App.GetData()`, driven by `tick()`.
-2. `main.go` `App.GetData` calls each collector exactly once: `cpuinfo`, then `nvidia`/`intel`/`amd`, then `storage`, `mainboard`, `memory`, `battery`. No GPU at all yields a `No GPU` placeholder card.
+2. `main.go` `App.GetData` calls each collector exactly once: `cpuinfo`, then `nvidia`/`intel`/`amd`/`lisuan`, then `storage`, `mainboard`, `memory`, `battery`. A machine whose vendors report no card gets no GPU card either (see `gpuViews`).
 3. Collectors return `shared.HardwareData{Name, Values, Status}`; an absent vendor returns nil/empty rather than being probed twice for availability.
 4. `main.go` `deviceView` keeps only the templates that carry a value, formats them (`formatValue` + `withUnit`) and folds the numeric ones into that card's own history under a prefix (`gpu0.`, `disk1.`, `battery0.`; none for board and memory).
 5. `website/app.js` `render` draws the cards; `gauge` picks bar direction and colour, `betterHigher` flags the readings where lower is better.
@@ -101,7 +101,8 @@ a template no collector produces; update the README section.
 comment (source + caps), `sysDir`-style path variable, `GetInformations`, a
 `NewHardwareValue` per reading, a fixture test, a template list and a call in
 `GetData`, then this file's table, `docs/testing.md`, and `Architecture (as built)`
-in `CODE_REVIEW.md`.
+in `CODE_REVIEW.md`. A vendor whose identity is not in the shipped databases also
+needs a naming table of its own (`lisuan/pci_ids.go` is the newest example).
 
 **Add a health verdict** — return `*shared.DeviceStatus` from the collector and the
 badge follows for free (`deviceView` copies it, `updateStatus` draws it). Use the

@@ -20,6 +20,10 @@ and the frontend calls the bound `App.GetData` method directly.
   - `nvidia` — `nvidia-smi --query-gpu=... --format=csv`.
   - `amd` — DRM sysfs (`/sys/class/drm/cardN/device/hwmon`) plus `lspci`.
   - `intel` — DRM sysfs (i915) plus `lspci`/`glxinfo`.
+  - `lisuan` — DRM sysfs for Lisuan Technology's 7G100 series (PCI vendor
+    `0x4c54`), named from a table built out of the PCI ID database because no
+    shipped database knows the vendor yet, with every reading taken from the
+    card's own hwmon directory and its bound driver module.
   - `mainboard` — DMI (`/sys/class/dmi/id`) plus the board's ACPI thermal zones
     and its hwmon monitoring chips (`nct67xx`, `it87xx`, `f718xx`, `w836xx`, …).
   - `storage` — `/sys/block` and `/sys/class/block` for drive identity, the
@@ -38,7 +42,7 @@ and the frontend calls the bound `App.GetData` method directly.
 
 Each GPU vendor package exposes a single collection entry point,
 `GetAllInformations()`, which returns `nil` when the vendor is unavailable and
-omits cards that expose no readable sensors. `main.go` appends the three results
+omits cards that expose no readable sensors. `main.go` appends the four results
 and never probes a vendor twice.
 
 There is no HTTP listener, no port, and no template loading at request time. The
@@ -692,6 +696,7 @@ The following were fixed and are now covered by tests.
 | `nvidia`   | CSV field parsing, unit stripping, `[N/A]` handling, multi-row output splitting, column-to-metric contract driven through the real parser, name-with-comma alignment, truncated rows |
 | `amd`      | sysfs-mocked single/multi-card collection, GPU name cleaning and disambiguation |
 | `intel`    | sysfs-mocked single/multi-card collection with an exact name assertion, PCI ID mapping (Arc incl. Battlemage, integrated GPUs must not be named Arc, non-GPU IDs resolve to nothing), table integrity rules, name cleaning, rejection of identifier-only input, and a fallback that always yields a usable name |
+| `lisuan`   | sysfs-mocked collection of a 7G100-shaped card (name and version, temperature, clock, power, cap and fan, each with its unit), the absent case per sensor, the label-driven hotspot/memory temperature mapping (including a driver that lists memory first, and a labelled sensor past the cap being ignored), a published zero fan being reported, a card with no sensors and a card of another vendor both yielding nothing, an unknown device ID falling back to a name carrying no identifier, the driver version read through the card's own `driver`/`module` links (and its absence when unbound), two cards staying separate, and the naming table's integrity |
 | `mainboard`| sysfs-mocked DMI identity (including a blank/root-only field producing no row), board-zone selection and millidegree conversion, Super I/O temperatures and fans with and without driver labels, chip-name allowlist, sensor caps, unparsable readings |
 | `memory`   | `/proc/meminfo` parsing (KiB→GiB, unit strip, unparsable fields skipped), the `free`-style used figure from `MemAvailable`, the pre-3.14 fallback, swap omitted when unconfigured or half-reported, PSI `some`/`full` averages, malformed PSI lines producing no rows, and every row's presence *and* unit |
 | `battery`  | power_supply-mocked battery listing: an energy (Wh) pack with every field, a charge (Ah) pack that must produce the other family's rows and no time estimate, two packs as two cards in supply-name order, absent and unparsable fields producing no rows, an empty bay (`present` 0), a peripheral's battery (scope `Device`) and a kernel that reports no scope, a supply with no readable type, a desktop, the AC row for mains/USB-C/unreadable-supply/absent-adapter and the UPS exclusion, the health thresholds with a battery below each, no design capacity meaning no verdict, and the time estimate in each direction |
@@ -956,8 +961,8 @@ These are known limitations rather than defects, listed roughly by value.
 27. **Six packages and one exported type have no doc comment.** `amd`, `intel`,
     `nvidia`, `cpuinfo`, `shared` and the root `main` package carry no
     `// Package <name>` block, and `main.Data`, the payload the frontend polls,
-    none either. `mainboard`, `storage`, `memory` and `battery` show the shape
-    that `AGENTS.md` asks new code to follow. Nothing depends on the omission,
+    none either. `mainboard`, `storage`, `memory`, `battery` and `lisuan` show the
+    shape that `AGENTS.md` asks new code to follow. Nothing depends on the omission,
     which makes this documentation debt rather than a defect, but the package
     comment is where a future reader finds the data source and the caps
     together; for these packages that lives only in `README.md`, as prose per
@@ -965,3 +970,19 @@ These are known limitations rather than defects, listed roughly by value.
     them into an unrelated fix would break the one-logical-change-per-commit
     rule. No test can assert any of it, which is why the gap is listed here
     rather than fixed.
+
+28. **Lisuan support rests on the driver's published files, not on hardware.** No
+    machine here has a 7G100, the vendor's Linux driver is out of tree, and its
+    sysfs or hwmon surface is not published anywhere this project could check, so
+    the collector is verified against fixture trees only. It reads the DRM card
+    node for identity, the card's own hwmon directory for temperatures, clocks,
+    fans and power, and the bound module's `version` — nothing vendor-specific is
+    assumed about any of them. Two consequences follow. A driver that publishes
+    nothing beyond identity draws no card at all, which `-debug` reports rather
+    than the app drawing a title over an empty table. And VRAM size, VRAM in use
+    and GPU utilisation are deliberately not read, because those attribute names
+    belong to amdgpu's interface and reading them here would be a guess presented
+    as support. What would close it: a machine with the card, or driver
+    documentation naming the attributes it publishes — either turns the missing
+    rows into a table entry and a few reads, the same distance the Arc item
+    above is from being finished.
