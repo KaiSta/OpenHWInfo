@@ -1,11 +1,42 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+# Dependabot keeps the two direct Go dependencies and the actions pinned in
+# .github/workflows/ current. The project deliberately has exactly two direct
+# dependencies (wailsapp/wails/v2, godbus/dbus/v5), so an update here is small
+# and reviewable; a new dependency still needs a reason in the commit body and
+# cannot arrive as a silent part of an update PR.
+#
+# Reference: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
+
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # Go modules, from go.mod at the repository root. Patch and minor updates
+  # arrive as one PR so a week of indirect bumps (wails pulls in about thirty)
+  # is a single run of the CI gates rather than a dozen; a major bump stays its
+  # own PR because Wails links the webview through cgo, so its majors can change
+  # the build tags, packaging or GTK requirement and deserve a review of their
+  # own.
+  - package-ecosystem: gomod
+    directory: "/"
     schedule:
-      interval: "weekly"
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    labels:
+      - dependencies
+
+  # The workflows pin checkout, setup-go, upload-artifact and download-artifact.
+  # Each action is updated on its own: a major there can change a default the
+  # release job relies on (artifact layout, node runtime), so it should be a
+  # visible PR that runs CI before it merges.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    labels:
+      - dependencies

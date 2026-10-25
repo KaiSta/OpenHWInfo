@@ -696,6 +696,18 @@ The following were fixed and are now covered by tests.
   trailers dropped, because it is the one commit written for users; a message with
   no body falls back to GitHub's generated list, and a re-run edits the notes and
   re-uploads the assets instead of failing on the release that already exists.
+- Dependency updates arrive through `.github/dependabot.yml`, which replaced the
+  GitHub template stub whose empty `package-ecosystem: ""` named no ecosystem
+  and is not a valid configuration. It now names both ecosystems the
+  repository actually has: Go modules weekly from the root, and the four actions
+  pinned in `.github/workflows/`. Go patch and minor bumps are grouped into one
+  PR so a week of indirect bumps (Wails alone pulls in about thirty) is a single
+  run of the gates, while a major bump stays its own PR — Wails links the webview
+  through cgo, so its majors can move the build tags, the packaging or the GTK
+  requirement and are worth reading rather than skimming. Actions are updated one
+  per action for the same reason: a major there can change an artifact layout or
+  node runtime the release job depends on. Nothing is auto-merged; Dependabot only
+  opens the PR and `.github/workflows/ci.yml` decides it.
 - The same gates run earlier for anyone who opts in: `.githooks/` (installed with
   `make hooks`, which sets `core.hooksPath`) gates `gofmt` and the generated code
   map before a commit exists, and checks the subject-line rules. Hooks are local
