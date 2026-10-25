@@ -1,0 +1,126 @@
+name: Release
+
+# Cutting a release is one tag: `git tag v1.2.3 && git push origin v1.2.3`.
+#
+# The two packages are built on a machine of their own architecture -- amd64 on
+# ubuntu-24.04, arm64 on ubuntu-24.04-arm -- and attached to the GitHub release
+# for that tag. A cross-build was rejected: Wails links the webview through cgo,
+# so an arm64 package built on an amd64 runner needs an arm64 sysroot, toolchain
+# and pkg-config wiring for a result no better than the native one GitHub now
+# hosts for every repository.
+# Only a version tag releases: a push to a branch builds nothing here, and there
+# is no manual trigger, so a release always names the commit it was built from.
+on:
+  push:
+    tags: ["v*"]
+
+# The workflows only read the repository; the release job asks for the write
+# permission it needs on its own job.
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: .deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One architecture failing must not hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Wails needs the GTK and WebKit development headers and a C toolchain to
+      # link the webview, and `make package` shells out to dpkg-deb (dpkg-dev).
+      - name: install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential dpkg-dev libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # ./VERSION is the one place the version is bumped, so a package is never
+      # labelled by its tag alone. The tag has to agree with the file -- v0.1.0
+      # releases what VERSION calls 0.1.0 -- otherwise this fails here instead of
+      # publishing a .deb whose name and control file disagree with the commit.
+      # The tag is checked against Debian's version grammar too, because it is
+      # dpkg-deb that would reject it later, with less to go on.
+      - name: resolve the version
+        id: version
+        run: |
+          version="$(cat VERSION)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match VERSION ($version): expected v$version"
+            exit 1
+          fi
+          case "$version" in
+            [0-9]*) ;;
+            *)
+              echo "::error::'$version' is not a Debian version: it must start with a digit"
+              exit 1
+              ;;
+          esac
+          case "$version" in
+            *[!0-9A-Za-z.+~-]*)
+              echo "::error::'$version' is not a Debian version: allowed are 0-9 A-Z a-z . + ~ -"
+              exit 1
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # MAINTAINER is the address the control file records. A repository variable
+      # of that name overrides the Makefile's default, which is a placeholder.
+      - name: build the package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          MAINTAINER: ${{ vars.MAINTAINER }}
+        run: |
+          if [ -n "$MAINTAINER" ]; then
+            make package VERSION="$VERSION" MAINTAINER="$MAINTAINER"
+          else
+            make package VERSION="$VERSION"
+          fi
+
+      - name: upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: publish the release
+    needs: deb
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: fetch the packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A re-run repairs a release that exists instead of failing on it, so the
+      # assets always match the tag's build.
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.deb --clobber
+          else
+            gh release create "$TAG" dist/*.deb \
+              --title "OpenHWInfo ${TAG#v}" \
+              --generate-notes
+          fi

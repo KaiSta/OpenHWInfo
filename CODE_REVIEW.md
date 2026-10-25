@@ -681,6 +681,17 @@ The following were fixed and are now covered by tests.
   `make map` is the only writer and `go test ./...` is the check; the hand-written
   half carries no line numbers at all, which is what keeps the two from ever
   contradicting each other.
+- The releases are built by `.github/workflows/release.yml` rather than by hand: a
+  `v*` tag runs `make package` on an amd64 runner and on an arm64 runner and
+  attaches both `.deb` files to the GitHub release. The version comes from
+  `./VERSION`, which `make package` reads too, and the workflow refuses a tag that
+  does not equal `v$(cat VERSION)` — otherwise a release could be named by its tag
+  while the control file inside it carried another version. The arm64 package is built natively
+  on `ubuntu-24.04-arm`; a cross-build was rejected because Wails links WebKitGTK
+  through cgo, so it would need an arm64 sysroot, toolchain and pkg-config wiring
+  to produce what the arm64 runner builds directly. It is triggered by nothing but
+  a `v*` tag, so every released package was built from the tagged commit; there is
+  deliberately no manual or branch trigger that could publish an untagged build.
 - The same gates run earlier for anyone who opts in: `.githooks/` (installed with
   `make hooks`, which sets `core.hooksPath`) gates `gofmt` and the generated code
   map before a commit exists, and checks the subject-line rules. Hooks are local

@@ -9,11 +9,13 @@ BINARY := OpenHWInfo
 TAGS    := production,webkit2_41
 DEV_TAGS := dev,webkit2_41
 
-# Packaging (make package / make install). Override the version like so:
+# Packaging (make package / make install). The version lives in ./VERSION, which
+# the release workflow checks the tag against, so a release is bumped by editing
+# that file. Override it for a one-off package:
 #   make package VERSION=1.0.0
 # Lowercase id used for the desktop entry, icon and deb package name.
 APP      := openhwinfo
-VERSION  ?= 0.1.0
+VERSION  ?= $(shell cat VERSION)
 ARCH     := $(shell dpkg --print-architecture)
 # Maintainer recorded in the .deb control file. Override with your real address
 # when publishing: make package MAINTAINER="Your Name <you@example.org>"

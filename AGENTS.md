@@ -61,6 +61,12 @@ go test ./... -count=1 -race        # -race matters: collectors cache state acro
 go build -tags=production,webkit2_41 -o /tmp/OpenHWInfo .
 ```
 
+`.github/workflows/release.yml` sits outside those gates, and only a `v*` tag
+triggers it: it runs `make package` on an amd64 and an arm64 runner and attaches
+both `.deb` files to the release. A branch push builds nothing there. `./VERSION`
+is the single source of the version and the tag must equal `v$(cat VERSION)`; bump
+that file in the commit the tag points at, never the tag alone.
+
 Tests need no webview headers and no hardware — collectors are driven from fixture
 trees, so the suite passes on a machine with no GPU, no battery and no drives.
 `./OpenHWInfo -debug` traces what each collector found and why a device was

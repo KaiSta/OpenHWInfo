@@ -25,11 +25,24 @@ The `production` tag is required for Wails to create the native window; `webkit2
 
 > **Note:** Running `go build .` without tags will fail with "Wails applications will not build without the correct build tags." Always use `make build` or add `-tags=production,webkit2_41`.
 
-The build output (`./OpenHWInfo`) is **not tracked by git** — it is rebuilt by `make build` and ignored via `.gitignore`. `make package` writes `dist/openhwinfo_<version>_<arch>.deb`; override `VERSION` and `MAINTAINER` for a release build:
+The build output (`./OpenHWInfo`) is **not tracked by git** — it is rebuilt by `make build` and ignored via `.gitignore`. `make package` writes `dist/openhwinfo_<version>_<arch>.deb`, taking the version from [`VERSION`](VERSION); both `VERSION` and `MAINTAINER` can be overridden for a one-off package:
 
 ```bash
 make package VERSION=1.0.0 MAINTAINER="Your Name <you@example.org>"
 ```
+
+### Releases
+
+The version lives in [`VERSION`](VERSION) — the one file a release bumps, read by `make package` as well as by CI. A release is a `v` tag that matches that file, so `v0.1.0` releases what `VERSION` calls `0.1.0`, and a tag that disagrees with it fails before anything is packaged:
+
+```bash
+echo 0.2.0 > VERSION
+git commit -m "Release 0.2.0" VERSION
+git tag v0.2.0
+git push origin main v0.2.0
+```
+
+That tag is the only trigger. `.github/workflows/release.yml` runs `make package` on an amd64 runner and on an arm64 runner, then attaches `dist/openhwinfo_<version>_amd64.deb` and `..._arm64.deb` to the GitHub release — a branch push or a manual run builds nothing there, so every released `.deb` was built from the tagged commit. The packages are built on a machine of their own architecture rather than cross-compiled, because Wails links the webview through cgo. The control file's `Maintainer` is the Makefile's default unless a repository variable named `MAINTAINER` is set.
 
 ## Reading the output
 
