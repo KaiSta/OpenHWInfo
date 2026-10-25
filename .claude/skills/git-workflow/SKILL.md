@@ -93,13 +93,19 @@ Co-Authored-By: <tool> <noreply@example.com>
 6. Say what was deliberately not done, and add it to `## Remaining opportunities` in
    `CODE_REVIEW.md` when it is worth tracking.
 7. Keep the AI-attribution trailers on AI-assisted commits.
+8. The **release commit** — the one the `v*` tag points at, which bumps
+   `./VERSION` — is the exception to rules 3 and 4. It is read by users deciding
+   whether to upgrade rather than by the next maintainer, so its body is short and
+   lists the user-visible changes as bullets in the words `README.md` uses. The
+   release workflow publishes that body as the GitHub release notes, so it is
+   Markdown. `AGENTS.md` carries the full wording.
 
 ## Which document moves
 
 | If you changed… | Update |
 |-----------------|--------|
 | Any symbol: added, renamed, removed, or moved between files | `make map`, and stage `.claude/skills/code-map/docs/` |
-| A row, card, unit, threshold, badge or refresh behaviour a user can see | `README.md` — that device's `## … infos` section, and `## Reading the output` if the min/max or table contract moved |
+| A row, card, unit, threshold, badge or refresh behaviour a user can see | `README.md` — that device's `## … readings` section, and `Reading the output` if the min/max or table contract moved |
 | A collector's data source, what it reads, or what it deliberately ignores | `README.md` (that device's section) and the package doc comment |
 | A new package, entry point, cap constant or fixture helper | The hand-written half of the `code-map` skill: its file table, the poll chain, `docs/testing.md` |
 | A package's responsibility or a build step | `## Architecture (as built)` in `CODE_REVIEW.md`, "What this project is" in `AGENTS.md`, and the file table in `code-map` |

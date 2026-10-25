@@ -1,56 +1,135 @@
-# OpenHWInfo
+# OpenHWInfo — Linux hardware monitor for CPU, GPU, memory, storage and battery
 
-A native desktop hardware monitor (CPU, memory, GPU, storage and mainboard) built with [Wails](https://wails.io). The Go backend collects live sensor data and the embedded webview renders it, refreshing every 5 seconds.
+<img src="icons/icon-512.png" width="112" align="right" alt="OpenHWInfo icon — a Linux hardware monitor for CPU, GPU, memory, storage and battery">
 
-## Build & Run
+OpenHWInfo is a native **Linux hardware monitor** that shows what your machine is doing right now: CPU temperature and per-core clocks, GPU temperature and usage, VRAM, fan speeds, SSD and HDD health, mainboard sensors, RAM and swap, and laptop battery wear — all in one window, refreshed every five seconds.
 
-### Linux (WebKitGTK 4.1)
+It reads the kernel's own interfaces directly — `/proc`, `/sys`, hwmon and UDisks2 over D-Bus — instead of parsing the output of `lm-sensors`, `smartctl` or `nvme-cli`. There is nothing to install alongside it, nothing to configure, and nothing to run as root. The Go backend and the web frontend are embedded in one self-contained executable.
 
-Prerequisites: `sudo apt install libwebkit2gtk-4.1-dev build-essential`
+## Highlights
+
+* **Everything in one window** — CPU, GPU (NVIDIA, AMD, Intel and Lisuan), drives, mainboard, memory and battery, each on its own card.
+* **No root, no helper tools, no configuration.** No `lm-sensors`, `smartctl`, `nvme-cli` or background service of its own; the readings come from the kernel and from the UDisks2 service your desktop already runs.
+* **It never shows a zero for a reading it could not take.** A missing sensor produces no row rather than a fake `0`, which is the rule the whole app is built around.
+* **Health verdicts, not just numbers** — `SMART: Good` / `Warning` / `Failing` per drive and `Health: Good` / `Worn` / `Poor` per battery, with the figures behind the verdict in the tooltip.
+* **Quiet on the machine it monitors.** Identities are resolved once, readings are cached, and SMART is read passively so a sleeping drive is not spun up.
+* **No network listener and no telemetry.** Every reading comes from the machine it runs on.
+
+## Features
+
+### CPU
+
+* Vendor, brand and model name, and one clock per logical processor.
+* CPU (package) temperature, chipset/PCH temperature, per-core temperatures, and AMD per-CCD (TCCD) temperatures where the processor reports them.
+* Per-core temperatures are matched to the thread that runs on that core, so both threads of an SMT core show that core's reading.
+* A compact per-core grid: current clock, a bar scaled against the highest clock reached, and the observed min–max range.
+
+### GPU
+
+* **NVIDIA** through `nvidia-smi`: core and memory temperature, VRAM used and total, power draw and power limit, clocks, fan speed, utilisation and driver version.
+* **AMD** through the `amdgpu` sysfs interface: temperature and hotspot/junction temperature, VRAM used and total, GPU clock, average power draw and cap, fan speed and GPU utilisation.
+* **Intel** through the `i915` sysfs interface: the card is named from a PCI ID table, with driver version, temperature, hotspot, clock, power draw and fan speed where the driver publishes them.
+* **Lisuan** 7G100 series cards: name from a PCI ID table, driver version, temperature and any hotspot/VRAM sensors the driver labels as such, clock, power draw, power cap and fan speed.
+* VRAM rows are omitted on integrated graphics, where memory is shared with the system; a sensor the card does not expose produces no row, and a card with no readable sensors is not drawn at all.
+
+### Storage and drive health
+
+* One card per drive: model, serial number, firmware revision, medium (`SSD`, `SSD (NVMe)`, `HDD`), capacity in decimal GB, temperature, and filesystem used/free space.
+* **SMART health badge** per drive, read from UDisks2 — no root and no `smartctl` needed.
+* Life used, power-on time, bad sectors, self-test result, spare capacity (NVMe), media errors (NVMe) and lifetime data written in TBW.
+* Reads are passive: the attribute table is queried at most once a minute and with UDisks2's `nowakeup` option, so a sleeping drive answers with an error instead of being spun up.
+
+### Mainboard
+
+* Board vendor, model, version and serial number, plus BIOS version and date from DMI/SMBIOS.
+* Board temperatures from the ACPI thermal zones (`acpitz`, chipset zones).
+* Temperature and fan-header readings from the board's Super I/O chips (Nuvoton, ITE, Fintek, Winbond) and ASUS/Gigabyte WMI sensors, labelled with the driver's own names such as `SYSTIN` or `Chassis Fan Speed`.
+
+### Memory
+
+* RAM total, used and available in binary GiB, with usage percentage.
+* Swap total, used and usage on machines that have swap configured.
+* Memory pressure (`some` and `full`) from the kernel's PSI accounting.
+* zram details: compressor, uncompressed size, usage, the RAM the compressed store actually costs, compression ratio and device count.
+
+### Battery
+
+* One card per battery: status, charge percentage, energy in Wh or charge in Ah, health, power draw, voltage, charge cycles, time to empty or full, AC adapter state, and model/manufacturer/serial/technology.
+* **Health badge** (`Good` / `Worn` / `Poor`) computed from what the pack holds when full against its design capacity, with the figures in the tooltip.
+* Multiple packs are each reported separately; an empty battery bay and the battery inside a wireless mouse or headset are not reported.
+
+### The window itself
+
+* Refreshes every five seconds; min and max columns keep the observed range over the last 100 samples (about eight minutes).
+* Every value carries its unit next to it, so a figure and its label cannot disagree.
+* Colour-coded temperature bars, health badges with reasons, and no cards for hardware the machine does not have.
+
+## Installation
+
+### Debian and Ubuntu (recommended)
+
+Download the package for your architecture from the [Releases page](https://github.com/KaiSta/OpenHWInfo/releases) — `amd64` for Intel and AMD machines, `arm64` for ARM — and install it:
+
+```bash
+sudo apt install ./openhwinfo_0.1.0_amd64.deb
+```
+
+`apt` is used rather than `dpkg -i` so the GTK 3 and WebKitGTK 4.1 runtime packages are pulled in automatically. Afterwards, start **OpenHWInfo** from your application menu, or run `openhwinfo` in a terminal.
+
+### Build from source
+
+Prerequisites on Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-dev build-essential`
 
 ```bash
 make run        # builds + runs the native app
 make build      # just builds → ./OpenHWInfo
 make dev        # development mode with hot-reload (serves frontend from disk)
 make test       # run all tests
-make map        # refresh the agent-facing code map (make test checks it is current)
-make hooks      # install the repo's git hooks into this clone (one-time)
-make package    # build a .deb installer into dist/ (also: make install)
+make package    # build a .deb installer into dist/
+make install    # desktop entry + icons for the current user
 make clean      # remove binary and dist/
 ```
 
-`./OpenHWInfo -debug` additionally logs what each collector found on every poll — the DRM cards, drives and sensor chips, and why a device was skipped. Normal runs print nothing, so a genuine warning is visible when it appears.
+The `production` tag is required for Wails to create the native window; `webkit2_41` selects WebKitGTK 4.1 (on an older distribution, install `libwebkit2gtk-4.0-dev` and drop that tag). The frontend in `website/` is embedded into the binary, so a single self-contained executable is produced.
 
-The `production` tag is required for Wails to create the native window; `webkit2_41` selects WebKitGTK 4.1 (use `libwebkit2gtk-4.0-dev` and drop this tag on older distros). The frontend in `website/` is embedded into the binary, so a single self-contained executable is produced.
+> **Note:** running `go build .` without tags fails with "Wails applications will not build without the correct build tags". Use `make build`, or add `-tags=production,webkit2_41`.
 
-> **Note:** Running `go build .` without tags will fail with "Wails applications will not build without the correct build tags." Always use `make build` or add `-tags=production,webkit2_41`.
+## Requirements
 
-The build output (`./OpenHWInfo`) is **not tracked by git** — it is rebuilt by `make build` and ignored via `.gitignore`. `make package` writes `dist/openhwinfo_<version>_<arch>.deb`, taking the version from [`VERSION`](VERSION); both `VERSION` and `MAINTAINER` can be overridden for a one-off package:
+* Linux with GTK 3 and WebKitGTK 4.1 — `libwebkit2gtk-4.1-0` on Debian and Ubuntu, which the `.deb` installs for you.
+* No root and no extra sensor packages: `lm-sensors`, `smartctl` and `nvme-cli` are not needed.
+* For SATA drive temperatures, the kernel's `drivetemp` module has to be loaded; NVMe drives report their own. Without it the temperature row is absent, not zero.
+* For SMART readings, UDisks2 (`udisksd`) has to be running — the service a desktop installation starts anyway.
 
-```bash
-make package VERSION=1.0.0 MAINTAINER="Your Name <you@example.org>"
-```
+## Usage
 
-### Releases
+Start **OpenHWInfo** from the application menu or run `openhwinfo`. Each card is one piece of hardware; each row is one reading, with its unit and its observed min/max range.
 
-The version lives in [`VERSION`](VERSION) — the one file a release bumps, read by `make package` as well as by CI. A release is a `v` tag that matches that file, so `v0.1.0` releases what `VERSION` calls `0.1.0`, and a tag that disagrees with it fails before anything is packaged:
+`openhwinfo -debug` (or `./OpenHWInfo -debug` from a build) writes what each collector found on every poll — the DRM cards, drives and sensor chips, and why a device was skipped. Normal runs print nothing, so a genuine warning stays visible when it appears.
 
-```bash
-echo 0.2.0 > VERSION
-git commit -m "Release 0.2.0" VERSION
-git tag v0.2.0
-git push origin main v0.2.0
-```
+### Reading the output
 
-That tag is the only trigger. `.github/workflows/release.yml` runs `make package` on an amd64 runner and on an arm64 runner, then attaches `dist/openhwinfo_<version>_amd64.deb` and `..._arm64.deb` to the GitHub release — a branch push or a manual run builds nothing there, so every released `.deb` was built from the tagged commit. The packages are built on a machine of their own architecture rather than cross-compiled, because Wails links the webview through cgo. The control file's `Maintainer` is the Makefile's default unless a repository variable named `MAINTAINER` is set.
+Each metric is a key/value pair with a unit and a value type. Min and max track the observed range over the last 100 samples (~8 minutes at the 5 s refresh).
 
-## Reading the output
+Per-core clocks render as a compact grid rather than one table row per core, so a 32-thread CPU stays readable. Each tile shows the current clock, a bar scaled against the highest clock any core has reached (so boost headroom is visible), and the observed min–max range. When core temperatures can be attributed to a thread, they appear in the same tile; otherwise they render in their own block. See [CPU readings](#cpu-readings).
 
-Each metric is a key/value pair with a unit and a value type. Min and max columns track the observed range over the last 100 samples (~8 minutes at the 5 s refresh).
+Cards, rows and tiles are reconciled in place rather than rebuilt, which is what keeps the bar transitions and the scroll position stable while the numbers change.
 
-Per-core clocks render as a compact grid rather than one table row per core, so a 32-thread CPU stays readable. Each tile shows the current clock, a bar scaled against the highest clock any core has reached (so boost headroom is visible), and the observed min–max range. When the core temperatures can be attributed to a thread, they appear in the same tile; otherwise they render in their own block. See the CPU section below.
+## Where the readings come from
 
-## CPU infos
+| Card | Source |
+|------|--------|
+| CPU | `/proc/cpuinfo`, and the processor's own hwmon chips (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`) |
+| GPU — NVIDIA | `nvidia-smi --query-gpu=... --format=csv,noheader` |
+| GPU — AMD | `/sys/class/drm/cardN/device` (vendor `0x1002`) plus hwmon, named through `lspci` |
+| GPU — Intel | `/sys/class/drm/cardN/device` (vendor `0x8086`) plus hwmon, named from a PCI ID table with an `lspci`/`glxinfo` fallback |
+| GPU — Lisuan | `/sys/class/drm/cardN/device` (vendor `0x4c54`) plus hwmon and the bound driver module |
+| Storage | `/sys/block` and `/sys/class/block`, `/proc/mounts` + `statfs`, the drive's `nvme`/`drivetemp` hwmon chip, and UDisks2 over D-Bus for SMART |
+| Mainboard | `/sys/class/dmi/id`, `/sys/class/thermal/thermal_zone*`, and the board's Super I/O hwmon chips |
+| Memory | `/proc/meminfo`, `/proc/pressure/memory`, `/sys/block/zramN` |
+| Battery | `/sys/class/power_supply` |
+
+## CPU readings
 
 `/proc/cpuinfo`
 
@@ -88,42 +167,9 @@ on a machine whose processor sensors are spread over more than one chip. The
 package figure is then the **hottest** package's reading. A mislabelled core
 would be worse than an absent row, so nothing is guessed.
 
-## Mainboard infos
+## GPU readings
 
-DMI (`/sys/class/dmi/id`, i.e. the SMBIOS strings the firmware publishes)
-
-* Vendor, model and version of the board, and its serial number when the
-  firmware exposes one — `board_serial` is root-only on many systems, and a
-  blank field produces **no row** rather than an empty one
-* BIOS version and BIOS date
-
-The board's own sensors come from two places.
-
-ACPI thermal zones (`/sys/class/thermal/thermal_zone*`)
-
-* The generic `acpitz` zone and the chipset zones (`pch_skylake`, `TZ00`, …).
-  Component zones — CPU package, GPU, wireless card, disks — are deliberately
-  *not* reported here, because those readings belong to the component's own card.
-
-Mainboard monitoring chips (`/sys/class/hwmon/hwmon*`)
-
-* The Super I/O chips soldered onto the board — Nuvoton `nct67xx`, ITE `it87xx`,
-  Fintek `f718xx`, Winbond `w836xx` — plus ASUS/Gigabyte WMI board sensors.
-  Temperatures (`tempN_input`) and fan headers (`fanN_input`) are read, and each
-  sensor's own label is used when the driver provides one (`tempN_label`,
-  `fanN_label`), so rows read `SYSTIN Temperature` or `Chassis Fan Speed` rather
-  than `Sensor 3`.
-* CPU (`coretemp`, `k10temp`), GPU, storage, wireless and battery hwmon chips are
-  skipped: their readings are reported by the CPU and GPU cards instead.
-
-Like the per-core CPU rows, the board's temperature and fan rows are generated
-from what the board actually reports (`board.tempN`, `board.fanN`), so a board
-with a dozen fan headers shows all of them. A board that reports nothing at all
-(no SMBIOS, no board sensors) produces no card.
-
-## GPU infos
-
-### Nvidia
+### NVIDIA
 
 `nvidia-smi --query-gpu=... --format=csv,noheader`
 
@@ -190,27 +236,7 @@ A sensor file that does not exist produces **no metric**, rather than a zero rea
 
 A machine that reports no GPU whatsoever — a virtual machine, a headless host, or a card whose driver exposes nothing — gets no GPU card either, exactly as the memory and mainboard cards are withheld when the machine reports nothing for them. The card is left out rather than drawn as a title over an empty table, because that table would state nothing the machine said. `./OpenHWInfo -debug` is what tells the two cases apart: it logs whether the collectors found a card and why one was skipped, since a card that is simply absent leaves no other trace.
 
-## Memory infos
-
-`/proc/meminfo` (RAM and swap), `/proc/pressure/memory` (the kernel's own pressure accounting) and `/sys/block/zramN` (the compressed store swap usually lives on) — one card for the machine
-
-* **Memory Total**, **Used** and **Available**, in binary GiB — a machine sold as 16 GB reports exactly `16.00 GiB`. `Used` is `Total − Available`, the same figure `free` prints: `MemAvailable` is the kernel's estimate of what a new workload could claim without swapping, whereas `MemFree` ignores the reclaimable cache and would report a healthy machine as nearly full.
-* **Memory Usage** — the used share of total.
-* **Swap Total**, **Used** and **Usage** — only on a machine that has swap configured. A system with no swap reports no swap rows rather than three zeroes.
-* **Memory Pressure (some)** and **(full)** — the share of the last ten seconds during which tasks were stalled waiting for memory. `some` counts the windows in which at least one task stalled, `full` only those in which every task did, so `full` is the stronger signal that a machine is actually struggling. Both are absent on a kernel built without PSI.
-* **Zram Algorithm**, **Size**, **Usage**, **Memory** and **Ratio** — on a machine that swaps to a compressed RAM block device, and only when at least one device is configured. These rows describe the store itself rather than what is inside it: the swap rows above say how much the machine has swapped out, and these say what that costs.
-  * **Zram Size** is the device's uncompressed capacity in binary GiB — what it can hold before it is full. Note that this is the *uncompressed* figure, which is why it can be larger than the RAM the machine has.
-  * **Zram Usage** is the share of that capacity currently holding data.
-  * **Zram Memory** is what the stored data actually costs in RAM. It is larger than the data's compressed size, because the kernel's figure includes allocator fragmentation and per-page metadata, and it is quoted in MiB because an idle device costs a few hundred kilobytes — in GiB every idle machine would read `0.00`.
-  * **Zram Ratio** compares the data stored against its compressed size, written `4.00:1`. It appears only once there is data on both sides of it, and with almost nothing stored it is dominated by the few pages that are there — a freshly configured device reads tens to one — so **Zram Memory** is the figure to read on an idle machine.
-  * **Zram Algorithm** names the compressor in use, and only when every device uses the same one; naming one of several would be a claim about devices that do not use it. **Zram Devices** appears only when the kernel has more than one configured, because the other rows are then sums rather than one device's own figures.
-  * A device the module pre-created but nobody configured is skipped: it has no size, holds nothing and costs nothing. If any configured device's counters cannot be read, the counter rows are withheld rather than reported as a sum over the devices that did answer.
-
-`zswap` — the kernel's own compressed cache in front of a swap device — is a different mechanism and is not read. `zram` devices are also never reported as drives: they hold no filesystem identity of their own.
-
-`Used` and `Available` are derived from one reading, so they are only shown together: a machine whose availability cannot be read shows `Total` on its own, because a guess rendered as `0.00 GiB used` would be the app's claim rather than the kernel's. Kernels before 3.14 do not report `MemAvailable`; the figure is then derived the way those kernels' tooling derived it, from free memory plus the reclaimable caches.
-
-## Storage infos
+## Storage readings
 
 Sysfs (`/sys/block`, `/sys/class/block`) — one card per drive, no root required
 
@@ -239,7 +265,60 @@ One caveat belongs with those rows rather than in a footnote: attribute 241's *u
 
 Readings are passive: the attribute table is read at most once a minute and with UDisks2's `nowakeup` option, so a sleeping drive answers with an error rather than being spun up. If udisksd is not running, or reports that a drive has no SMART, the card simply has no badge and no SMART rows.
 
-## Battery infos
+## Mainboard readings
+
+DMI (`/sys/class/dmi/id`, i.e. the SMBIOS strings the firmware publishes)
+
+* Vendor, model and version of the board, and its serial number when the
+  firmware exposes one — `board_serial` is root-only on many systems, and a
+  blank field produces **no row** rather than an empty one
+* BIOS version and BIOS date
+
+The board's own sensors come from two places.
+
+ACPI thermal zones (`/sys/class/thermal/thermal_zone*`)
+
+* The generic `acpitz` zone and the chipset zones (`pch_skylake`, `TZ00`, …).
+  Component zones — CPU package, GPU, wireless card, disks — are deliberately
+  *not* reported here, because those readings belong to the component's own card.
+
+Mainboard monitoring chips (`/sys/class/hwmon/hwmon*`)
+
+* The Super I/O chips soldered onto the board — Nuvoton `nct67xx`, ITE `it87xx`,
+  Fintek `f718xx`, Winbond `w836xx` — plus ASUS/Gigabyte WMI board sensors.
+  Temperatures (`tempN_input`) and fan headers (`fanN_input`) are read, and each
+  sensor's own label is used when the driver provides one (`tempN_label`,
+  `fanN_label`), so rows read `SYSTIN Temperature` or `Chassis Fan Speed` rather
+  than `Sensor 3`.
+* CPU (`coretemp`, `k10temp`), GPU, storage, wireless and battery hwmon chips are
+  skipped: their readings are reported by the CPU and GPU cards instead.
+
+Like the per-core CPU rows, the board's temperature and fan rows are generated
+from what the board actually reports (`board.tempN`, `board.fanN`), so a board
+with a dozen fan headers shows all of them. A board that reports nothing at all
+(no SMBIOS, no board sensors) produces no card.
+
+## Memory readings
+
+`/proc/meminfo` (RAM and swap), `/proc/pressure/memory` (the kernel's own pressure accounting) and `/sys/block/zramN` (the compressed store swap usually lives on) — one card for the machine
+
+* **Memory Total**, **Used** and **Available**, in binary GiB — a machine sold as 16 GB reports exactly `16.00 GiB`. `Used` is `Total − Available`, the same figure `free` prints: `MemAvailable` is the kernel's estimate of what a new workload could claim without swapping, whereas `MemFree` ignores the reclaimable cache and would report a healthy machine as nearly full.
+* **Memory Usage** — the used share of total.
+* **Swap Total**, **Used** and **Usage** — only on a machine that has swap configured. A system with no swap reports no swap rows rather than three zeroes.
+* **Memory Pressure (some)** and **(full)** — the share of the last ten seconds during which tasks were stalled waiting for memory. `some` counts the windows in which at least one task stalled, `full` only those in which every task did, so `full` is the stronger signal that a machine is actually struggling. Both are absent on a kernel built without PSI.
+* **Zram Algorithm**, **Size**, **Usage**, **Memory** and **Ratio** — on a machine that swaps to a compressed RAM block device, and only when at least one device is configured. These rows describe the store itself rather than what is inside it: the swap rows above say how much the machine has swapped out, and these say what that costs.
+  * **Zram Size** is the device's uncompressed capacity in binary GiB — what it can hold before it is full. Note that this is the *uncompressed* figure, which is why it can be larger than the RAM the machine has.
+  * **Zram Usage** is the share of that capacity currently holding data.
+  * **Zram Memory** is what the stored data actually costs in RAM. It is larger than the data's compressed size, because the kernel's figure includes allocator fragmentation and per-page metadata, and it is quoted in MiB because an idle device costs a few hundred kilobytes — in GiB every idle machine would read `0.00`.
+  * **Zram Ratio** compares the data stored against its compressed size, written `4.00:1`. It appears only once there is data on both sides of it, and with almost nothing stored it is dominated by the few pages that are there — a freshly configured device reads tens to one — so **Zram Memory** is the figure to read on an idle machine.
+  * **Zram Algorithm** names the compressor in use, and only when every device uses the same one; naming one of several would be a claim about devices that do not use it. **Zram Devices** appears only when the kernel has more than one configured, because the other rows are then sums rather than one device's own figures.
+  * A device the module pre-created but nobody configured is skipped: it has no size, holds nothing and costs nothing. If any configured device's counters cannot be read, the counter rows are withheld rather than reported as a sum over the devices that did answer.
+
+`zswap` — the kernel's own compressed cache in front of a swap device — is a different mechanism and is not read. `zram` devices are also never reported as drives: they hold no filesystem identity of their own.
+
+`Used` and `Available` are derived from one reading, so they are only shown together: a machine whose availability cannot be read shows `Total` on its own, because a guess rendered as `0.00 GiB used` would be the app's claim rather than the kernel's. Kernels before 3.14 do not report `MemAvailable`; the figure is then derived the way those kernels' tooling derived it, from free memory plus the reclaimable caches.
+
+## Battery readings
 
 `/sys/class/power_supply` — one card per battery, no root required, on a laptop
 
@@ -256,3 +335,49 @@ Each card carries a health badge beside its title — `Health: Good`, `Health: W
 A laptop can have **more than one battery** — an internal pack plus a removable one, or one in an ultrabay — and each gets its own card, titled with the supply name the kernel lists (`BAT0`, `BAT1`), with its own capacity, its own wear and its own min/max history. A battery bay with the pack removed (`present` is 0) is not reported, and neither is a peripheral's battery: a wireless mouse or headset reports one too, under scope `Device`. A supply whose type cannot be read is skipped rather than assumed to be a battery, so a mains adapter can never end up on a battery card.
 
 Nothing is derived that the firmware did not state. A reading that cannot be taken produces no row rather than a zero, a battery that publishes almost nothing shows almost nothing, and time to empty or full is only estimated where the arithmetic is exact — energy over power, while the battery is actually discharging or charging. A charge-family battery gets no estimate, because Ah cannot be divided by watts without the voltage; a full battery on the mains gets none either, since it moves no power in either direction.
+
+## Design rules
+
+Three rules explain most of the behaviour above, and they are the standard a change to a collector is held to.
+
+1. **An absent reading is no row, not a zero.** A missing hotspot sensor, an unreadable serial and an empty battery bay all produce no row. A `0` would be the app's claim about the machine, which is the one thing a monitor must not make up.
+2. **The unit travels on the reading.** Every value carries its own unit, rendered from the reading itself, so a figure and the label beside it cannot disagree — `GB` and `GiB` are deliberately different units and are never merged.
+3. **No forks on the refresh path, no root, no optional tools.** Names and versions are resolved once per process, slow readings are cached, and every reading comes from `/proc`, `/sys` or UDisks2. `shared.RunCommand` (no shell) is preferred when an argument comes from sysfs.
+
+## Development
+
+OpenHWInfo is a Go backend of one collector per vendor or subsystem, plus a dependency-free frontend (`website/`) embedded into the binary with `//go:embed all:website`. There is no HTTP server, no port and no template loading at request time.
+
+```bash
+make build      # go vet ./..., then the production binary → ./OpenHWInfo
+make test       # go test ./... (fixtures only: no hardware, no webview headers needed)
+make lint       # go vet ./...
+make map        # regenerate the agent-facing code map (make test checks it is current)
+make hooks      # install the repo's git hooks into this clone (one-time)
+make package    # .deb into dist/ (needs dpkg-deb)
+make install    # desktop entry + hicolor icons into ~/.local/share
+make clean      # remove binary and dist/
+```
+
+Collectors are fixture-testable: file-system roots and external paths are package variables, so a test points them at a `t.TempDir()` tree and the suite passes on a machine with no GPU, no battery and no drives. `./OpenHWInfo -debug` traces what each collector found and why a device was skipped.
+
+`./OpenHWInfo`, `dist/` and `build/` are build output and are ignored by git, so `make build` is free to overwrite the binary. A one-off package can override the version and maintainer without touching `VERSION`: `make package VERSION=1.0.0 MAINTAINER="Your Name <you@example.org>"`.
+
+### Releases
+
+The version lives in [`VERSION`](VERSION) — the one file a release bumps, read by `make package` as well as by CI. A release is a `v` tag that matches that file, so `v0.1.0` releases what `VERSION` calls `0.1.0`, and a tag that disagrees with it fails before anything is packaged:
+
+```bash
+echo 0.2.0 > VERSION
+git commit -m "Release 0.2.0" VERSION
+git tag v0.2.0
+git push origin main v0.2.0
+```
+
+That tag is the only trigger. `.github/workflows/release.yml` runs `make package` on an amd64 runner and on an arm64 runner, then attaches `dist/openhwinfo_<version>_amd64.deb` and `..._arm64.deb` to the GitHub release — a branch push or a manual run builds nothing there, so every released `.deb` was built from the tagged commit. The release notes are the release commit's own message, minus the attribution trailers, so what someone reads on the release page is what the commit says; a release commit with no body falls back to GitHub's generated list. The packages are built on a machine of their own architecture rather than cross-compiled, because Wails links the webview through cgo. The control file's `Maintainer` is the Makefile's default unless a repository variable named `MAINTAINER` is set.
+
+`AGENTS.md` describes how an agent works in this repository and `CODE_REVIEW.md` records the design decisions, the test coverage and the known limitations.
+
+## License
+
+OpenHWInfo is licensed under the [Apache License 2.0](LICENSE). It may be used, modified and redistributed, including commercially, as long as the license text and the attribution notices travel with it.

@@ -131,6 +131,18 @@ load it before staging. Documentation belongs in the same commit as the code, an
 changed symbol is a documentation change: run `make map`, which the pre-commit hook
 and the test suite both enforce.
 
+The one commit written for users is the **release commit** — the one the `v*` tag
+points at, which bumps `./VERSION`. Its message is what someone reads to decide
+whether to install or upgrade, so write it for them and keep it short: the version
+it ships, then one bullet per change a user can see — a card or row that now
+appears, a reading that is now correct, a GPU vendor that is now supported, a
+requirement that changed — in the words `README.md` uses, not the words of the
+code. The why, the rejected alternatives and the verification belong to the
+commits that made the changes; the release commit only says what arrives. That
+message is published as the GitHub release notes (the attribution trailers are
+stripped), so it is Markdown and it is the last thing a user reads before
+downloading.
+
 ## Done
 
 - [ ] `gofmt -l .` prints nothing, `go vet ./...` is clean.

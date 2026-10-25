@@ -104,6 +104,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The tagged commit's message is the release page, so it has to be here. A
+      # tag push checks out that commit, so one commit of history is enough.
+      - uses: actions/checkout@v4
+
       - name: fetch the packages
         uses: actions/download-artifact@v4
         with:
@@ -111,14 +115,33 @@ jobs:
           merge-multiple: true
 
       # A re-run repairs a release that exists instead of failing on it, so the
-      # assets always match the tag's build.
+      # page and the assets always match the tag's build.
       - name: create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          # `gh` can infer the repository from the checkout above; naming it
+          # keeps publishing independent of that checkout's remote, which is how
+          # this step failed when the job had no checkout at all.
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          # The release commit is the one commit written for users (AGENTS.md), so
+          # its body is the release page. The attribution trailers it carries are
+          # not for users, so they are dropped. No body at all falls back to
+          # GitHub's generated list rather than publishing an empty page.
+          notes="$(git log -1 --format=%b \
+            | grep -v -e '^Co-Authored-By: ' -e '^Generated with ' -e '^🤖 Generated with ' \
+            || true)"
+
           if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ -n "$notes" ]; then
+              gh release edit "$TAG" --notes "$notes"
+            fi
             gh release upload "$TAG" dist/*.deb --clobber
+          elif [ -n "$notes" ]; then
+            gh release create "$TAG" dist/*.deb \
+              --title "OpenHWInfo ${TAG#v}" \
+              --notes "$notes"
           else
             gh release create "$TAG" dist/*.deb \
               --title "OpenHWInfo ${TAG#v}" \

@@ -692,6 +692,10 @@ The following were fixed and are now covered by tests.
   to produce what the arm64 runner builds directly. It is triggered by nothing but
   a `v*` tag, so every released package was built from the tagged commit; there is
   deliberately no manual or branch trigger that could publish an untagged build.
+  The release page's notes are that commit's own message with the attribution
+  trailers dropped, because it is the one commit written for users; a message with
+  no body falls back to GitHub's generated list, and a re-run edits the notes and
+  re-uploads the assets instead of failing on the release that already exists.
 - The same gates run earlier for anyone who opts in: `.githooks/` (installed with
   `make hooks`, which sets `core.hooksPath`) gates `gofmt` and the generated code
   map before a commit exists, and checks the subject-line rules. Hooks are local

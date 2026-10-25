@@ -84,8 +84,9 @@ install: build
 	update-desktop-database ~/.local/share/applications >/dev/null 2>&1 || true
 	@echo "Done. Restart the app (or log out/in) to see the new panel icon."
 
-# Build a .deb installer into dist/ (binary + desktop entry + hicolor icons,
-# same layout as `install` but system-wide). Install with: sudo dpkg -i dist/$(DEBNAME)
+# Build a .deb installer into dist/ (binary + desktop entry + hicolor icons +
+# the license text, which a distributed package has to carry). Install with:
+# sudo dpkg -i dist/$(DEBNAME)
 package: build
 	rm -rf $(PKGDIR) dist/$(DEBNAME)
 	mkdir -p $(PKGDIR)/DEBIAN \
@@ -93,6 +94,7 @@ package: build
 	         $(PKGDIR)/usr/share/applications
 	for s in $(ICON_SIZES); do mkdir -p $(PKGDIR)/usr/share/icons/hicolor/$${s}x$${s}/apps; done
 	cp $(BINARY) $(PKGDIR)/usr/bin/$(APP)
+	install -Dm0644 LICENSE $(PKGDIR)/usr/share/doc/$(APP)/copyright
 	sed "s|@EXEC@|/usr/bin/$(APP)|" openhwinfo.desktop > $(PKGDIR)/usr/share/applications/openhwinfo.desktop
 	for pair in $(ICON_FILES); do size=$${pair%%:*}; file=$${pair#*:}; cp "$$file" $(PKGDIR)/usr/share/icons/hicolor/$${size}x$${size}/apps/openhwinfo.png; done
 	printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: %s\nDepends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0\nDescription: OpenHWInfo — live CPU, GPU & mainboard hardware monitor (Go + Wails v2)\n Displays real-time CPU, GPU and mainboard metrics such as temperature,\n clock, usage, power draw, VRAM and board fan speeds.\n' \
