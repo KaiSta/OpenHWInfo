@@ -33,7 +33,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -106,7 +106,7 @@ jobs:
     steps:
       # The tagged commit's message is the release page, so it has to be here. A
       # tag push checks out that commit, so one commit of history is enough.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: fetch the packages
         uses: actions/download-artifact@v4
